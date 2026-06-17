@@ -1,0 +1,13 @@
+{
+  "name": "olomix-cc-thingz",
+  "owner": {
+    "name": "Oleg Lomaka"
+  },
+  "plugins": [
+    {
+      "name": "fsnotes",
+      "source": "./plugins/fsnotes",
+      "description": "Search, create, edit, and delete notes managed by the FSNotes macOS app via natural requests."
+    }
+  ]
+}

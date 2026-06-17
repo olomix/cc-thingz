@@ -80,21 +80,21 @@ use, where the iCloud path + glob fallback applies).
 ## Implementation Steps
 
 ### Task 1: Marketplace and plugin scaffolding
-- [ ] create `.claude-plugin/marketplace.json` (`name: olomix-cc-thingz`,
+- [x] create `.claude-plugin/marketplace.json` (`name: olomix-cc-thingz`,
       `owner.name`, `plugins: [{ name: fsnotes, source: ./plugins/fsnotes,
       description }]`)
-- [ ] create `plugins/fsnotes/.claude-plugin/plugin.json` (`name`,
+- [x] create `plugins/fsnotes/.claude-plugin/plugin.json` (`name`,
       `description`, `version: 0.1.0`, `author`, `homepage`/`repository`
       = the cc-thingz repo, `license: MIT`)
-- [ ] add root `LICENSE` (MIT) and `.gitignore` (OS cruft: `.DS_Store`)
-- [ ] create `tests/fsnotes_test.sh` skeleton: bash strict mode, a
+- [x] add root `LICENSE` (MIT) and `.gitignore` (OS cruft: `.DS_Store`)
+- [x] create `tests/fsnotes_test.sh` skeleton: bash strict mode, a
       `fixture` setup that builds a temp notes dir with sample
       `.markdown` notes, a notebook subfolder, `Trash/` and `files/`, an
       `assert` helper, and a final pass/fail summary with non-zero exit on
       failure
-- [ ] add test: both manifests are valid JSON and contain required keys
-- [ ] run `shellcheck tests/fsnotes_test.sh` - must pass
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 2
+- [x] add test: both manifests are valid JSON and contain required keys
+- [x] run `shellcheck tests/fsnotes_test.sh` - must pass
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 2
 
 ### Task 2: Notes-directory resolution library
 - [ ] create `plugins/fsnotes/scripts/fsnotes-lib.sh` with
