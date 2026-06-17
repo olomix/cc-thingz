@@ -145,12 +145,13 @@ main() {
     title)
       # First-heading matches plus filename matches. A note whose heading and
       # filename both match would otherwise appear twice; dedupe on the path
-      # (the field before the first colon) and keep the richer `path:line:text`
-      # form.
+      # and keep the richer `path:line:text` form. The dedup key is the line
+      # with any trailing `:line:text` heading suffix stripped, so paths that
+      # contain colons (FSNotes permits them) are not truncated.
       {
         match_title_headings "$query"
         match_filenames "$query"
-      } | awk -F: '!seen[$1]++'
+      } | awk '{ key = $0; sub(/:[0-9]+:.*$/, "", key); if (!seen[key]++) print }'
       ;;
     tag)
       local tag="${query#\#}"

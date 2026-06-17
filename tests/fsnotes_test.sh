@@ -201,6 +201,13 @@ test_search() {
     contains "Alpha note.markdown" "$out"
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Buried)"
   assert_eq "title mode ignores body headings" "" "$out"
+  # Distinct notes whose filenames share a colon-prefix must not collapse:
+  # dedupe keys on the path, not the substring before the first colon.
+  printf '# Re Sync one\n' > "$fixture/Re: Sync one.markdown"
+  printf '# Re Sync two\n' > "$fixture/Re: Sync two.markdown"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Sync | wc -l | tr -d ' ')"
+  assert_eq "title mode keeps colon-prefixed distinct notes" "2" "$out"
+  rm -f "$fixture/Re: Sync one.markdown" "$fixture/Re: Sync two.markdown"
 
   # tag: matches inline hashtag (leading # optional).
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"
