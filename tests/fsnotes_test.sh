@@ -82,6 +82,8 @@ make_fixture() {
     > "$dir/Meeting notes.markdown"
   printf '# Project plan\n\nQ3 goals for the team. #work\n' \
     > "$dir/Work/Project plan.markdown"
+  printf '# Workshop ideas\n\nPlanning a #workshop next month.\n' \
+    > "$dir/Workshop ideas.markdown"
   printf '# Deleted note\n\nOld content. #shopping\n' \
     > "$dir/Trash/Deleted note.markdown"
 
@@ -187,6 +189,9 @@ test_search() {
     contains "Meeting notes.markdown" "$out"
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" title nonexistentxyz)"
   assert_eq "title mode no-match is empty" "" "$out"
+  # A note whose heading and filename both match must appear only once.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Meeting | wc -l | tr -d ' ')"
+  assert_eq "title mode dedupes heading+filename match" "1" "$out"
 
   # tag: matches inline hashtag (leading # optional).
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"
@@ -195,6 +200,10 @@ test_search() {
   assert "tag mode accepts leading #" contains "Meeting notes.markdown" "$out"
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag nosuchtag)"
   assert_eq "tag mode no-match is empty" "" "$out"
+  # Word boundary: #work must not match the longer #workshop tag.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"
+  assert "tag mode respects word boundary (not #workshop)" bash -c \
+    "! printf '%s' \"\$1\" | grep -q Workshop" _ "$out"
 
   # Exclusions: Trash/ and files/ are never searched.
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag shopping)"
@@ -213,6 +222,9 @@ test_search() {
   assert_eq "notebook scope excludes out-of-folder match" "" "$out"
   assert "unknown notebook fails" bash -c \
     "! FSNOTES_DIR='$fixture' '$SEARCH' text goals NoSuchBook 2>/dev/null"
+  # A notebook escaping the store via ".." is rejected before any search.
+  assert "notebook traversal is rejected" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' text goals '../../etc' 2>/dev/null"
 
   # folder mode: <query> is the notebook, restricting a body search to it.
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" folder Work goals)"
@@ -277,6 +289,13 @@ test_newpath() {
   # Missing title is an error.
   assert "newpath requires a title" bash -c \
     "! FSNOTES_DIR='$fixture' '$NEWPATH' 2>/dev/null"
+
+  # A notebook escaping the store via ".." is rejected, printing no path.
+  assert "newpath rejects traversal notebook" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'escape' '../../../tmp' 2>/dev/null"
+  out="$(FSNOTES_DIR="$fixture" "$NEWPATH" 'escape' '../../../tmp' \
+    2>/dev/null || true)"
+  assert_eq "newpath prints nothing for traversal notebook" "" "$out"
 
   rm -rf "$fixture"
 }

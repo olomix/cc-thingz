@@ -102,6 +102,7 @@ main() {
   # Optional notebook scope: search target is the subfolder, else the whole store.
   local target='.'
   if [[ -n "$notebook" ]]; then
+    guard_notebook "$notebook" || return 1
     if [[ ! -d "$notes_dir/$notebook" ]]; then
       printf 'fsnotes: notebook not found: %s\n' "$notebook" >&2
       return 1
@@ -117,9 +118,13 @@ main() {
       run_search "$query"
       ;;
     title)
-      # Heading lines plus filename matches.
-      run_search "^#[[:space:]].*$(escape_ere "$query")" ere
-      match_filenames "$query"
+      # Heading lines plus filename matches. A note whose heading and filename
+      # both match would otherwise appear twice; dedupe on the path (the field
+      # before the first colon) and keep the richer `path:line:text` form.
+      {
+        run_search "^#[[:space:]].*$(escape_ere "$query")" ere
+        match_filenames "$query"
+      } | awk -F: '!seen[$1]++'
       ;;
     tag)
       local tag="${query#\#}"

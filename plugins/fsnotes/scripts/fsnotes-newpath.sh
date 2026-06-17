@@ -32,7 +32,10 @@ main() {
   base="$(sanitize_title "$title")" || return 1
 
   local dir="$notes_dir"
-  [[ -n "$notebook" ]] && dir="$notes_dir/$notebook"
+  if [[ -n "$notebook" ]]; then
+    guard_notebook "$notebook" || return 1
+    dir="$notes_dir/$notebook"
+  fi
 
   local path="$dir/$base.markdown"
   if [[ -e "$path" ]]; then

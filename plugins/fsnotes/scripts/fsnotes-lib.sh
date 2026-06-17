@@ -51,6 +51,27 @@ resolve_notes_dir() {
   return 1
 }
 
+# guard_notebook <name> : reject notebook names that would escape the store —
+# absolute paths or any ".." path component. The scripts claim to contain all
+# access to the notes store, so a notebook derived from free-form user input
+# must not be able to point outside it. Returns non-zero with a message.
+guard_notebook() {
+  # Wrapping in slashes lets one test catch ".." as a whole, prefix, or suffix.
+  case "/$1/" in
+    *"/../"*)
+      printf 'fsnotes: invalid notebook name: %s\n' "$1" >&2
+      return 1
+      ;;
+  esac
+  case "$1" in
+    /*)
+      printf 'fsnotes: invalid notebook name: %s\n' "$1" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 # sanitize_title <title> : print a filesystem-safe base name (no extension).
 # Strips control characters, replaces path separators, drops leading dots so
 # the result is never a hidden/parent reference, and collapses whitespace.

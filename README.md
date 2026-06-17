@@ -24,8 +24,10 @@ layout so it operates on the store reliably:
 The actual logic lives in small, deterministic shell scripts under
 `plugins/fsnotes/scripts/`, so it can be unit-tested:
 
-- `fsnotes-search.sh <mode> <query> [notebook]` — search by `text`, `title`,
-  `tag`, or `folder` (a body search scoped to one notebook).
+- `fsnotes-search.sh <mode> <query> [notebook]` — search by `text`, `title`, or
+  `tag`, with an optional `[notebook]` scoping any mode to one subfolder.
+  `folder` is a body search scoped to a notebook and instead takes its
+  arguments as `fsnotes-search.sh folder <notebook> <query>`.
 - `fsnotes-newpath.sh <title> [notebook]` — print a safe, collision-free path
   for a new note (never overwrites).
 - `fsnotes-trash.sh <note-path>` — move a note into `Trash/` (never
