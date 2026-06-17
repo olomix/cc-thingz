@@ -180,12 +180,12 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 8
 
 ### Task 8: Verify acceptance criteria
-- [ ] verify all spec operations (search 4 modes, create, edit, delete) are
+- [x] verify all spec operations (search 4 modes, create, edit, delete) are
       represented by scripts + skill instructions
-- [ ] run `shellcheck` on every `.sh` under `plugins/` and `tests/` - clean
-- [ ] validate every manifest JSON and every markdown frontmatter block
-- [ ] run the full `tests/fsnotes_test.sh` suite - all pass
-- [ ] confirm no hardcoded local notebook names and no reliance on the real
+- [x] run `shellcheck` on every `.sh` under `plugins/` and `tests/` - clean
+- [x] validate every manifest JSON and every markdown frontmatter block
+- [x] run the full `tests/fsnotes_test.sh` suite - all pass
+- [x] confirm no hardcoded local notebook names and no reliance on the real
       iCloud store in any test
 
 ### Task 9: [Final] Documentation
