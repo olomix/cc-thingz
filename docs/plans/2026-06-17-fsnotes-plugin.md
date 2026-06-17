@@ -189,11 +189,11 @@ use, where the iCloud path + glob fallback applies).
       iCloud store in any test
 
 ### Task 9: [Final] Documentation
-- [ ] write root `README.md` (marketplace + fsnotes plugin: what it does,
+- [x] write root `README.md` (marketplace + fsnotes plugin: what it does,
       install steps `/plugin marketplace add olomix/cc-thingz` →
       `/plugin install fsnotes`, the conventions it assumes, ripgrep
       recommendation)
-- [ ] note in README that scripts honor `FSNOTES_DIR` for testing
+- [x] note in README that scripts honor `FSNOTES_DIR` for testing
 
 ## Technical Details
 
