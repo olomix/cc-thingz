@@ -234,6 +234,41 @@ test_search_grep_fallback() {
   rm -f "$err"
 }
 
+# --- Tests: fsnotes-newpath.sh -----------------------------------------------
+
+NEWPATH="$PLUGIN_DIR/scripts/fsnotes-newpath.sh"
+
+test_newpath() {
+  local fixture out
+  fixture="$(make_fixture)"
+
+  # Fresh title → sanitized absolute path at the store root.
+  out="$(FSNOTES_DIR="$fixture" "$NEWPATH" 'Fresh idea')"
+  assert_eq "newpath builds path for fresh title" \
+    "$fixture/Fresh idea.markdown" "$out"
+
+  # Title is sanitized (slashes replaced) before forming the path.
+  out="$(FSNOTES_DIR="$fixture" "$NEWPATH" 'a/b')"
+  assert_eq "newpath sanitizes the title" "$fixture/a-b.markdown" "$out"
+
+  # Existing title → non-zero and no path printed (never overwrite).
+  assert "newpath refuses existing note" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'Grocery list' 2>/dev/null"
+  out="$(FSNOTES_DIR="$fixture" "$NEWPATH" 'Grocery list' 2>/dev/null || true)"
+  assert_eq "newpath prints nothing for existing note" "" "$out"
+
+  # Notebook subfolder placement.
+  out="$(FSNOTES_DIR="$fixture" "$NEWPATH" 'Sprint review' Work)"
+  assert_eq "newpath places note in notebook" \
+    "$fixture/Work/Sprint review.markdown" "$out"
+
+  # Missing title is an error.
+  assert "newpath requires a title" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 2>/dev/null"
+
+  rm -rf "$fixture"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -243,6 +278,7 @@ main() {
   test_sanitize_title
   test_search
   test_search_grep_fallback
+  test_newpath
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }

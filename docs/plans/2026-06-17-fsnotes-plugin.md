@@ -131,14 +131,14 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 4
 
 ### Task 4: New-note path helper
-- [ ] create `plugins/fsnotes/scripts/fsnotes-newpath.sh` sourcing the
+- [x] create `plugins/fsnotes/scripts/fsnotes-newpath.sh` sourcing the
       lib; given a title (and optional notebook), print the absolute
       target `.markdown` path; exit non-zero with a clear message if the
       target already exists (never overwrite)
-- [ ] write tests: fresh title → expected sanitized path; existing title →
+- [x] write tests: fresh title → expected sanitized path; existing title →
       non-zero + message; title placed into a notebook subfolder
-- [ ] run `shellcheck` on the script - must pass
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 5
+- [x] run `shellcheck` on the script - must pass
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 5
 
 ### Task 5: Trash (delete) script
 - [ ] create `plugins/fsnotes/scripts/fsnotes-trash.sh` sourcing the lib;
