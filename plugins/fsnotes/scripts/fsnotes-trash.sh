@@ -46,6 +46,15 @@ main() {
     return 1
   fi
 
+  # Refuse symlinks: the confinement check below canonicalizes only the parent
+  # directory, so an in-store symlink whose target lives outside the store would
+  # otherwise pass and have its target's contents hard-linked into Trash/.
+  # Real FSNotes notes are never symlinks.
+  if [[ -L "$src" ]]; then
+    printf 'fsnotes: refusing to trash a symlink: %s\n' "$note" >&2
+    return 1
+  fi
+
   # Confine to the store: canonicalize the source and refuse anything that does
   # not live under the notes directory. Absolute inputs would otherwise let a
   # caller move an arbitrary readable file into Trash/.

@@ -403,6 +403,18 @@ test_trash() {
   assert "trash leaves the outside file in place" test -e "$outside"
   rm -f "$outside"
 
+  # An in-store symlink pointing outside must be refused, not dereferenced into
+  # Trash/ (which would hard-link the outside target's contents into the store).
+  outside="$(mktemp)"
+  printf 'secret\n' >"$outside"
+  ln -s "$outside" "$fixture/Leak.markdown"
+  assert "trash rejects an in-store symlink" bash -c \
+    "! FSNOTES_DIR='$fixture' '$TRASH' 'Leak.markdown' 2>/dev/null"
+  assert "trash leaves the symlink in place" test -L "$fixture/Leak.markdown"
+  assert "trash does not pull the symlink target into Trash/" \
+    test ! -e "$fixture/Trash/Leak.markdown"
+  rm -f "$fixture/Leak.markdown" "$outside"
+
   rm -rf "$fixture"
 }
 
