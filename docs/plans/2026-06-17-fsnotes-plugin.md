@@ -163,21 +163,21 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 7
 
 ### Task 7: fsnotes skill (wiring)
-- [ ] create `plugins/fsnotes/skills/fsnotes/SKILL.md` with frontmatter
+- [x] create `plugins/fsnotes/skills/fsnotes/SKILL.md` with frontmatter
       (`name: fsnotes`, `description` triggering on note search/create/
       edit/delete; `allowed-tools: Bash, Read, Edit, Write, Task`)
-- [ ] document conventions (`.markdown`, `# Title`, notebooks =
+- [x] document conventions (`.markdown`, `# Title`, notebooks =
       subfolders, reserved `Trash/`/`files/`, inline hashtags) and the
       operation playbook: search → delegate to the `fsnotes-search`
       subagent; create → `fsnotes-newpath.sh` then `Write` (surface
       conflicts, no auto-tags); edit → locate then `Edit` in place, confirm
       when ambiguous; delete → `fsnotes-trash.sh`
-- [ ] explicitly state notebook names are discovered at runtime (none
+- [x] explicitly state notebook names are discovered at runtime (none
       hardcoded) and reference scripts via the plugin scripts dir
-- [ ] write test: SKILL.md has valid frontmatter with required keys and
+- [x] write test: SKILL.md has valid frontmatter with required keys and
       mentions each of the four scripts; grep the whole `plugins/` tree to
       assert no real-world local notebook names are hardcoded
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 8
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 8
 
 ### Task 8: Verify acceptance criteria
 - [ ] verify all spec operations (search 4 modes, create, edit, delete) are

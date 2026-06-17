@@ -360,6 +360,41 @@ test_search_agent() {
   done
 }
 
+# --- Tests: fsnotes SKILL.md -------------------------------------------------
+
+test_skill() {
+  local f="$PLUGIN_DIR/skills/fsnotes/SKILL.md"
+  assert "skill exists" test -f "$f"
+  assert "skill has name key" frontmatter_has_key "$f" name
+  assert "skill has description key" frontmatter_has_key "$f" description
+  assert "skill has allowed-tools key" frontmatter_has_key "$f" allowed-tools
+  assert_eq "skill name is fsnotes" "fsnotes" \
+    "$(frontmatter "$f" | awk -F': *' '/^name:/{print $2}')"
+
+  # The skill must reference each of the four scripts.
+  local script
+  for script in fsnotes-search.sh fsnotes-newpath.sh fsnotes-trash.sh \
+    fsnotes-lib.sh; do
+    assert "skill mentions $script" bash -c "grep -q '$script' '$f'"
+  done
+
+  # No real-world local notebook names may be hardcoded anywhere in the
+  # plugin tree. Notebooks are discovered at runtime; the only folder names
+  # that may appear are the reserved Trash/ and files/.
+  assert "no real notebook names hardcoded in plugins/" \
+    no_local_notebooks "$PLUGIN_DIR"
+}
+
+# no_local_notebooks <dir> : fail if any non-test file under <dir> references
+# a notebook name pulled from the user's actual store. Allowlist covers the
+# generic example names used in docs and the reserved folders.
+no_local_notebooks() {
+  local dir="$1"
+  # Personal notebook names that must never leak into the shipped plugin.
+  local forbidden='Inbox|Journal|Personal|Daily'
+  ! grep -rEl "($forbidden)" "$dir" >/dev/null 2>&1
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -372,6 +407,7 @@ main() {
   test_newpath
   test_trash
   test_search_agent
+  test_skill
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
