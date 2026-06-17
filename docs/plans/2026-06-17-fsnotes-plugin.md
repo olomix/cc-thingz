@@ -152,15 +152,15 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 6
 
 ### Task 6: Search subagent
-- [ ] create `plugins/fsnotes/agents/fsnotes-search.md` with frontmatter
+- [x] create `plugins/fsnotes/agents/fsnotes-search.md` with frontmatter
       (`name: fsnotes-search`, `description` covering all four modes and
       "returns only matching paths/lines", `tools: Bash, Read`)
-- [ ] body instructs the agent to call `fsnotes-search.sh`, choose the mode
+- [x] body instructs the agent to call `fsnotes-search.sh`, choose the mode
       from the request, pass a notebook when folder-scoped, and return a
       compact hit list (path + matched line/title) — not full note dumps
-- [ ] write test: agent file has valid frontmatter with required keys and
+- [x] write test: agent file has valid frontmatter with required keys and
       references the search script path
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 7
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 7
 
 ### Task 7: fsnotes skill (wiring)
 - [ ] create `plugins/fsnotes/skills/fsnotes/SKILL.md` with frontmatter

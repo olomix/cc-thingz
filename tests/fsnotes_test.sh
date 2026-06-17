@@ -57,6 +57,18 @@ contains() {
   esac
 }
 
+# frontmatter <file> : echo the YAML frontmatter block (between the first two
+# "---" fences). Empty when the file has no frontmatter.
+frontmatter() {
+  awk 'NR==1 && $0!="---"{exit} NR==1{next} $0=="---"{exit} {print}' "$1"
+}
+
+# frontmatter_has_key <file> <key> : true when the frontmatter has a top-level
+# "<key>:" entry.
+frontmatter_has_key() {
+  frontmatter "$1" | grep -Eq "^$2:"
+}
+
 # make_fixture : build a temp notes dir mirroring an FSNotes store and echo it.
 # Layout: top-level notes, a "Work" notebook subfolder, reserved Trash/ & files/.
 make_fixture() {
@@ -327,6 +339,27 @@ test_trash() {
   rm -rf "$fixture"
 }
 
+# --- Tests: fsnotes-search agent ---------------------------------------------
+
+test_search_agent() {
+  local f="$PLUGIN_DIR/agents/fsnotes-search.md"
+  assert "search agent exists" test -f "$f"
+  assert "search agent has name key" frontmatter_has_key "$f" name
+  assert "search agent has description key" frontmatter_has_key "$f" description
+  assert "search agent has tools key" frontmatter_has_key "$f" tools
+  assert_eq "search agent name is fsnotes-search" "fsnotes-search" \
+    "$(frontmatter "$f" | awk -F': *' '/^name:/{print $2}')"
+  assert "search agent references the search script" bash -c \
+    "grep -q 'fsnotes-search.sh' '$f'"
+
+  local fm mode
+  fm="$(frontmatter "$f")"
+  for mode in text title tag folder; do
+    assert "search agent description mentions $mode mode" \
+      contains "$mode" "$fm"
+  done
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -338,6 +371,7 @@ main() {
   test_search_grep_fallback
   test_newpath
   test_trash
+  test_search_agent
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
