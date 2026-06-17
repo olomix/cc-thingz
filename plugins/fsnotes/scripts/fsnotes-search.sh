@@ -47,8 +47,11 @@ run_search() {
   (
     cd "$notes_dir"
     if [[ "$backend" == "rg" ]]; then
+      # Exclude Trash/ and files/ at any depth (leading **/), matching grep's
+      # --exclude-dir. A bare `Trash/**` is anchored to the rg root, so a
+      # notebook-scoped search would leak a nested <notebook>/Trash/.
       local rg_args=(--line-number --no-heading --color=never -i
-        -g '*.markdown' -g '!Trash/**' -g '!files/**')
+        -g '*.markdown' -g '!**/Trash/**' -g '!**/files/**')
       [[ "$kind" == "ere" ]] || rg_args+=(--fixed-strings)
       rg "${rg_args[@]}" -- "$pattern" "$target" 2>/dev/null || true
     else
@@ -60,8 +63,9 @@ run_search() {
   ) | sed 's#^\./##'
 }
 
-# match_filenames <query> : print relative paths of notes whose filename
-# contains <query> (case-insensitive), excluding Trash/ and files/.
+# match_filenames <query> : print `path<TAB>path` for notes whose filename
+# contains <query> (case-insensitive), excluding Trash/ and files/. The
+# leading tab-delimited field is the dedup key; see the title-mode awk.
 match_filenames() {
   local query="$1" lower_q rel base lower_b
   lower_q="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
@@ -74,15 +78,16 @@ match_filenames() {
     base="$(basename "$rel" .markdown)"
     lower_b="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
     if [[ "$lower_b" == *"$lower_q"* ]]; then
-      printf '%s\n' "$rel"
+      printf '%s\t%s\n' "$rel" "$rel"
     fi
   done
 }
 
-# match_title_headings <query> : print `path:1:text` for notes whose FIRST line
-# is a "# " heading containing <query> (case-insensitive), excluding Trash/ and
-# files/. The note title is the first heading only — later body headings are
-# not titles, so they must not produce title hits.
+# match_title_headings <query> : print `path<TAB>path:1:text` for notes whose
+# FIRST line is a "# " heading containing <query> (case-insensitive), excluding
+# Trash/ and files/. The note title is the first heading only — later body
+# headings are not titles, so they must not produce title hits. The leading
+# tab-delimited field is the dedup key; see the title-mode awk.
 match_title_headings() {
   local query="$1" lower_q rel first lower_first
   lower_q="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
@@ -99,7 +104,7 @@ match_title_headings() {
     esac
     lower_first="$(printf '%s' "$first" | tr '[:upper:]' '[:lower:]')"
     if [[ "$lower_first" == *"$lower_q"* ]]; then
-      printf '%s:1:%s\n' "$rel" "$first"
+      printf '%s\t%s:1:%s\n' "$rel" "$rel" "$first"
     fi
   done
 }
@@ -145,13 +150,14 @@ main() {
     title)
       # First-heading matches plus filename matches. A note whose heading and
       # filename both match would otherwise appear twice; dedupe on the path
-      # and keep the richer `path:line:text` form. The dedup key is the line
-      # with any trailing `:line:text` heading suffix stripped, so paths that
-      # contain colons (FSNotes permits them) are not truncated.
+      # and keep the richer `path:line:text` form. Both producers emit the
+      # path as a leading tab-delimited key, so dedup is exact regardless of
+      # colons or digits in the path (FSNotes permits them). Headings come
+      # first, so the richer form wins; the key field is stripped before print.
       {
         match_title_headings "$query"
         match_filenames "$query"
-      } | awk '{ key = $0; sub(/:[0-9]+:.*$/, "", key); if (!seen[key]++) print }'
+      } | awk -F'\t' '!seen[$1]++ { sub(/^[^\t]*\t/, ""); print }'
       ;;
     tag)
       local tag="${query#\#}"

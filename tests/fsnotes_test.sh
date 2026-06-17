@@ -208,6 +208,14 @@ test_search() {
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Sync | wc -l | tr -d ' ')"
   assert_eq "title mode keeps colon-prefixed distinct notes" "2" "$out"
   rm -f "$fixture/Re: Sync one.markdown" "$fixture/Re: Sync two.markdown"
+  # The dedup key must not treat a `:<digits>:` substring in the filename as a
+  # `:line:` suffix, or distinct notes sharing that substring would collapse.
+  printf '# Re 12 one SyncDigit\n' > "$fixture/Re:12:one SyncDigit.markdown"
+  printf '# Re 12 two SyncDigit\n' > "$fixture/Re:12:two SyncDigit.markdown"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title SyncDigit | wc -l | tr -d ' ')"
+  assert_eq "title mode keeps colon-digit distinct notes" "2" "$out"
+  rm -f "$fixture/Re:12:one SyncDigit.markdown" \
+    "$fixture/Re:12:two SyncDigit.markdown"
 
   # tag: matches inline hashtag (leading # optional).
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"

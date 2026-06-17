@@ -42,7 +42,7 @@ their absolute path under the plugin's scripts dir:
 For any "find / look up / which note" request, dispatch the
 `fsnotes-search` subagent via the Task tool rather than searching yourself.
 It runs `scripts/fsnotes-search.sh <mode> <query> [notebook]` and returns a
-compact hit list (`relative/path:line`) without dumping note bodies. Pick
+compact hit list (`relative/path:line:text`) without dumping note bodies. Pick
 the mode from the request — `text` (body), `title` (heading/filename),
 `tag` (`#hashtag`), or `folder` (restrict a body search to one notebook) —
 and pass a notebook when the user scopes the search to one. Open a matched
