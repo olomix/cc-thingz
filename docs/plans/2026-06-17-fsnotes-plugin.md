@@ -97,21 +97,21 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 2
 
 ### Task 2: Notes-directory resolution library
-- [ ] create `plugins/fsnotes/scripts/fsnotes-lib.sh` with
+- [x] create `plugins/fsnotes/scripts/fsnotes-lib.sh` with
       `resolve_notes_dir`: if `FSNOTES_DIR` set and exists → use it; else
       use the iCloud primary path if it exists; else glob
       `~/Library/Mobile Documents/*fsnotes*/Documents`; on exactly one
       match → use it; on zero or many → print a clear error to stderr and
       return non-zero
-- [ ] add `sanitize_title` helper (title → filesystem-safe base name;
+- [x] add `sanitize_title` helper (title → filesystem-safe base name;
       strips/replaces `/`, control chars, leading dots; collapses spaces)
-- [ ] make the library safe to `source` (no side effects, no top-level
+- [x] make the library safe to `source` (no side effects, no top-level
       execution)
-- [ ] write tests: `FSNOTES_DIR` override resolves; missing primary →
+- [x] write tests: `FSNOTES_DIR` override resolves; missing primary →
       glob fallback resolves (simulate via a temp `*fsnotes*/Documents`);
       ambiguous → non-zero; `sanitize_title` success + nasty-input cases
-- [ ] run `shellcheck` on the new script - must pass
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 3
+- [x] run `shellcheck` on the new script - must pass
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 3
 
 ### Task 3: Search script
 - [ ] create `plugins/fsnotes/scripts/fsnotes-search.sh` sourcing

@@ -96,11 +96,64 @@ test_plugin_manifest() {
   assert "plugin has homepage" json_has_key "$f" '.homepage'
 }
 
+# --- Tests: fsnotes-lib.sh ---------------------------------------------------
+
+# shellcheck source=plugins/fsnotes/scripts/fsnotes-lib.sh
+source "$PLUGIN_DIR/scripts/fsnotes-lib.sh"
+
+test_resolve_notes_dir() {
+  local fixture
+  fixture="$(make_fixture)"
+
+  # FSNOTES_DIR override resolves to the given directory.
+  assert_eq "resolve_notes_dir honors FSNOTES_DIR" "$fixture" \
+    "$(FSNOTES_DIR="$fixture" resolve_notes_dir)"
+
+  # FSNOTES_DIR set to a non-directory fails.
+  assert "resolve_notes_dir rejects bad FSNOTES_DIR" \
+    bash -c "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; FSNOTES_DIR='$fixture/nope'; ! resolve_notes_dir 2>/dev/null"
+
+  # Glob fallback: no primary, exactly one *fsnotes*/Documents under HOME.
+  local home_one
+  home_one="$(mktemp -d)"
+  mkdir -p "$home_one/Library/Mobile Documents/co~fluder~fsnotes/Documents"
+  assert_eq "resolve_notes_dir glob fallback (unique match)" \
+    "$home_one/Library/Mobile Documents/co~fluder~fsnotes/Documents" \
+    "$(unset FSNOTES_DIR; HOME="$home_one" resolve_notes_dir)"
+
+  # Ambiguous: two matching directories → non-zero.
+  local home_many
+  home_many="$(mktemp -d)"
+  mkdir -p "$home_many/Library/Mobile Documents/a-fsnotes/Documents" \
+    "$home_many/Library/Mobile Documents/b-fsnotes/Documents"
+  assert "resolve_notes_dir fails on ambiguous match" \
+    bash -c "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; unset FSNOTES_DIR; HOME='$home_many'; ! resolve_notes_dir 2>/dev/null"
+
+  rm -rf "$fixture" "$home_one" "$home_many"
+}
+
+test_sanitize_title() {
+  assert_eq "sanitize_title passes plain text" "Grocery list" \
+    "$(sanitize_title 'Grocery list')"
+  assert_eq "sanitize_title replaces slashes" "a-b-c" \
+    "$(sanitize_title 'a/b/c')"
+  assert_eq "sanitize_title strips leading dots" "hidden" \
+    "$(sanitize_title '...hidden')"
+  assert_eq "sanitize_title collapses whitespace" "a b" \
+    "$(sanitize_title '  a    b  ')"
+  assert_eq "sanitize_title removes shell-hostile chars" "weird name" \
+    "$(sanitize_title 'weird:*?"<>|name')"
+  assert "sanitize_title rejects empty result" \
+    bash -c "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; ! sanitize_title '...' 2>/dev/null"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
   test_marketplace_manifest
   test_plugin_manifest
+  test_resolve_notes_dir
+  test_sanitize_title
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
