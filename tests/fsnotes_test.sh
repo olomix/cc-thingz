@@ -84,6 +84,9 @@ make_fixture() {
     > "$dir/Work/Project plan.markdown"
   printf '# Workshop ideas\n\nPlanning a #workshop next month.\n' \
     > "$dir/Workshop ideas.markdown"
+  # First line is the title; a later "# " line is a body heading, not a title.
+  printf '# Alpha note\n\n# Buried heading\n\nBody. #misc\n' \
+    > "$dir/Alpha note.markdown"
   printf '# Deleted note\n\nOld content. #shopping\n' \
     > "$dir/Trash/Deleted note.markdown"
 
@@ -192,6 +195,12 @@ test_search() {
   # A note whose heading and filename both match must appear only once.
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Meeting | wc -l | tr -d ' ')"
   assert_eq "title mode dedupes heading+filename match" "1" "$out"
+  # title matches the first heading, not a later body "# " heading.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Alpha)"
+  assert "title mode matches the first heading" \
+    contains "Alpha note.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Buried)"
+  assert_eq "title mode ignores body headings" "" "$out"
 
   # tag: matches inline hashtag (leading # optional).
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"
@@ -225,6 +234,11 @@ test_search() {
   # A notebook escaping the store via ".." is rejected before any search.
   assert "notebook traversal is rejected" bash -c \
     "! FSNOTES_DIR='$fixture' '$SEARCH' text goals '../../etc' 2>/dev/null"
+  # Reserved folders must not be searchable as notebooks (Trash/ exists here).
+  assert "reserved notebook Trash is rejected" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' text shopping Trash 2>/dev/null"
+  assert "reserved notebook files is rejected" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' text shopping files 2>/dev/null"
 
   # folder mode: <query> is the notebook, restricting a body search to it.
   out="$(FSNOTES_DIR="$fixture" "$SEARCH" folder Work goals)"
@@ -297,6 +311,18 @@ test_newpath() {
     2>/dev/null || true)"
   assert_eq "newpath prints nothing for traversal notebook" "" "$out"
 
+  # Reserved folders must not be usable as notebooks for new notes.
+  assert "newpath rejects reserved notebook Trash" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'sneaky' 'Trash' 2>/dev/null"
+  assert "newpath rejects reserved notebook files" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'sneaky' 'files' 2>/dev/null"
+
+  # A "." prefix must not slip a reserved folder past the guard.
+  assert "newpath rejects ./Trash notebook" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'sneaky' './Trash' 2>/dev/null"
+  assert "newpath rejects ./files notebook" bash -c \
+    "! FSNOTES_DIR='$fixture' '$NEWPATH' 'sneaky' './files' 2>/dev/null"
+
   rm -rf "$fixture"
 }
 
@@ -341,12 +367,17 @@ test_trash() {
   assert "newly trashed note retains its content" bash -c \
     "grep -q 'New list' '$fixture/Trash/Grocery list (1).markdown'"
 
-  # Absolute paths and notebook-relative paths both resolve.
+  # Absolute in-store paths and notebook-relative paths both resolve.
   out="$(FSNOTES_DIR="$fixture" "$TRASH" 'Work/Project plan.markdown')"
   assert_eq "trash accepts notebook-relative path" \
     "$fixture/Trash/Project plan.markdown" "$out"
   assert "trash removes notebook source" \
     test ! -e "$fixture/Work/Project plan.markdown"
+  out="$(FSNOTES_DIR="$fixture" "$TRASH" "$fixture/Workshop ideas.markdown")"
+  assert "trash accepts an absolute in-store path" \
+    test -f "$fixture/Trash/Workshop ideas.markdown"
+  assert "trash removes the absolute in-store source" \
+    test ! -e "$fixture/Workshop ideas.markdown"
 
   # Missing source → non-zero, nothing printed.
   assert "trash fails on missing source" bash -c \
@@ -362,6 +393,15 @@ test_trash() {
   assert "trash leaves the out-of-store file in place" \
     test -e "$fixture/../trash_victim.markdown"
   rm -f "$fixture/../trash_victim.markdown"
+
+  # An absolute path outside the store is canonicalized and refused.
+  local outside
+  outside="$(mktemp)"
+  printf 'outside\n' >"$outside"
+  assert "trash rejects an absolute path outside the store" bash -c \
+    "! FSNOTES_DIR='$fixture' '$TRASH' '$outside' 2>/dev/null"
+  assert "trash leaves the outside file in place" test -e "$outside"
+  rm -f "$outside"
 
   rm -rf "$fixture"
 }

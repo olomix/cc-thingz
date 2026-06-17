@@ -71,7 +71,8 @@ the user before editing.
 Run `scripts/fsnotes-trash.sh <note-path>` to move the note into the
 store's `Trash/` (created on demand; collisions get a numeric suffix). This
 never hard-deletes, mirroring FSNotes's own delete. Relative paths resolve
-against the notes dir; absolute paths are used as-is.
+against the notes dir; absolute paths must resolve inside it (anything
+outside the store is refused).
 
 ## Scripts reference
 

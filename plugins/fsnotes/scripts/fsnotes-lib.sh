@@ -51,14 +51,20 @@ resolve_notes_dir() {
   return 1
 }
 
-# guard_notebook <name> : reject notebook names that would escape the store —
-# absolute paths or any ".." path component. The scripts claim to contain all
-# access to the notes store, so a notebook derived from free-form user input
-# must not be able to point outside it. Returns non-zero with a message.
+# guard_notebook <name> : reject notebook names that would escape the store or
+# target a reserved folder. Rejects absolute paths, any "." or ".." path
+# component, and the FSNotes-managed Trash/ and files/ folders. The scripts
+# claim to contain all access to the notes store, so a notebook derived from
+# free-form user input must not be able to point outside it or into reserved
+# space. "." components are rejected because they would otherwise slip past the
+# reserved-folder check below (e.g. "./Trash" has leading component "."), while
+# still resolving to the reserved folder on disk.
+# Returns non-zero with a message.
 guard_notebook() {
-  # Wrapping in slashes lets one test catch ".." as a whole, prefix, or suffix.
+  # Wrapping in slashes lets one test catch "." / ".." as a whole, prefix, or
+  # suffix component.
   case "/$1/" in
-    *"/../"*)
+    *"/../"* | *"/./"*)
       printf 'fsnotes: invalid notebook name: %s\n' "$1" >&2
       return 1
       ;;
@@ -66,6 +72,19 @@ guard_notebook() {
   case "$1" in
     /*)
       printf 'fsnotes: invalid notebook name: %s\n' "$1" >&2
+      return 1
+      ;;
+  esac
+
+  # Trash/ and files/ are managed by FSNotes and must never be treated as
+  # notebooks. Compare the leading path component case-insensitively: the
+  # macOS store is case-insensitive, so "trash" resolves to the real "Trash".
+  local first lower
+  first="${1%%/*}"
+  lower="$(printf '%s' "$first" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    trash | files)
+      printf 'fsnotes: reserved folder name: %s\n' "$1" >&2
       return 1
       ;;
   esac

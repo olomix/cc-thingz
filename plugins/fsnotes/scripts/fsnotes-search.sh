@@ -79,6 +79,31 @@ match_filenames() {
   done
 }
 
+# match_title_headings <query> : print `path:1:text` for notes whose FIRST line
+# is a "# " heading containing <query> (case-insensitive), excluding Trash/ and
+# files/. The note title is the first heading only — later body headings are
+# not titles, so they must not produce title hits.
+match_title_headings() {
+  local query="$1" lower_q rel first lower_first
+  lower_q="$(printf '%s' "$query" | tr '[:upper:]' '[:lower:]')"
+  (
+    cd "$notes_dir"
+    find "$target" -type f -name '*.markdown' \
+      -not -path '*/Trash/*' -not -path '*/files/*' 2>/dev/null
+  ) | while IFS= read -r rel; do
+    rel="${rel#./}"
+    IFS= read -r first < "$notes_dir/$rel" || true
+    case "$first" in
+      '#'[[:space:]]*) ;;
+      *) continue ;;
+    esac
+    lower_first="$(printf '%s' "$first" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$lower_first" == *"$lower_q"* ]]; then
+      printf '%s:1:%s\n' "$rel" "$first"
+    fi
+  done
+}
+
 main() {
   local mode="${1:-}" query="${2:-}" notebook="${3:-}"
   if [[ -z "$mode" || -z "$query" ]]; then
@@ -118,11 +143,12 @@ main() {
       run_search "$query"
       ;;
     title)
-      # Heading lines plus filename matches. A note whose heading and filename
-      # both match would otherwise appear twice; dedupe on the path (the field
-      # before the first colon) and keep the richer `path:line:text` form.
+      # First-heading matches plus filename matches. A note whose heading and
+      # filename both match would otherwise appear twice; dedupe on the path
+      # (the field before the first colon) and keep the richer `path:line:text`
+      # form.
       {
-        run_search "^#[[:space:]].*$(escape_ere "$query")" ere
+        match_title_headings "$query"
         match_filenames "$query"
       } | awk -F: '!seen[$1]++'
       ;;
