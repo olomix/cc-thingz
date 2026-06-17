@@ -114,21 +114,21 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 3
 
 ### Task 3: Search script
-- [ ] create `plugins/fsnotes/scripts/fsnotes-search.sh` sourcing
+- [x] create `plugins/fsnotes/scripts/fsnotes-search.sh` sourcing
       `fsnotes-lib.sh`; usage:
       `fsnotes-search.sh <mode> <query> [notebook]` where mode ∈
       `text|title|tag|folder` (folder = restrict another mode to a
       subfolder; accept notebook as the optional 3rd arg for any mode)
-- [ ] detect `rg`; if absent fall back to `grep -r` and emit a one-time
+- [x] detect `rg`; if absent fall back to `grep -r` and emit a one-time
       stderr hint to install ripgrep
-- [ ] implement modes: `text` (body match), `title` (first `# ` heading +
+- [x] implement modes: `text` (body match), `title` (first `# ` heading +
       filename), `tag` (inline `#query`); always exclude `Trash/` and
       `files/`; output `relative/path:line` hits
-- [ ] write tests for each mode against the fixture (success + no-match);
+- [x] write tests for each mode against the fixture (success + no-match);
       verify `Trash/` and `files/` are excluded; force the grep path
       (e.g. `PATH`-shadow `rg`) and assert same results + hint emitted
-- [ ] run `shellcheck` on the script - must pass
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 4
+- [x] run `shellcheck` on the script - must pass
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 4
 
 ### Task 4: New-note path helper
 - [ ] create `plugins/fsnotes/scripts/fsnotes-newpath.sh` sourcing the

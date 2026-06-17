@@ -49,6 +49,14 @@ json_has_key() {
   [[ "$(jq -r "$path" "$file" 2>/dev/null)" != "null" ]]
 }
 
+# contains <needle> <haystack> : true when haystack contains needle.
+contains() {
+  case "$2" in
+    *"$1"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # make_fixture : build a temp notes dir mirroring an FSNotes store and echo it.
 # Layout: top-level notes, a "Work" notebook subfolder, reserved Trash/ & files/.
 make_fixture() {
@@ -147,6 +155,85 @@ test_sanitize_title() {
     bash -c "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; ! sanitize_title '...' 2>/dev/null"
 }
 
+# --- Tests: fsnotes-search.sh ------------------------------------------------
+
+SEARCH="$PLUGIN_DIR/scripts/fsnotes-search.sh"
+
+test_search() {
+  local fixture out
+  fixture="$(make_fixture)"
+
+  # text: body match finds the note, no match yields empty output.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" text Milk)"
+  assert "text mode finds body match" contains "Grocery list.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" text nonexistentxyz)"
+  assert_eq "text mode no-match is empty" "" "$out"
+
+  # title: matches the # heading and the filename.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title Meeting)"
+  assert "title mode matches filename/heading" \
+    contains "Meeting notes.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" title nonexistentxyz)"
+  assert_eq "title mode no-match is empty" "" "$out"
+
+  # tag: matches inline hashtag (leading # optional).
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag work)"
+  assert "tag mode finds #work" contains "Meeting notes.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag '#work')"
+  assert "tag mode accepts leading #" contains "Meeting notes.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag nosuchtag)"
+  assert_eq "tag mode no-match is empty" "" "$out"
+
+  # Exclusions: Trash/ and files/ are never searched.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" tag shopping)"
+  assert "tag mode finds top-level #shopping" \
+    contains "Grocery list.markdown" "$out"
+  assert "tag mode excludes Trash/" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' tag shopping | grep -q Trash"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" text 'Old content')"
+  assert_eq "text mode excludes Trash/ body" "" "$out"
+
+  # Notebook scoping via the optional 3rd argument.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" text goals Work)"
+  assert "notebook scope finds in-folder match" \
+    contains "Work/Project plan.markdown" "$out"
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" text Milk Work)"
+  assert_eq "notebook scope excludes out-of-folder match" "" "$out"
+  assert "unknown notebook fails" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' text goals NoSuchBook 2>/dev/null"
+
+  # folder mode: <query> is the notebook, restricting a body search to it.
+  out="$(FSNOTES_DIR="$fixture" "$SEARCH" folder Work goals)"
+  assert "folder mode restricts to notebook" \
+    contains "Work/Project plan.markdown" "$out"
+
+  # Usage / unknown mode error out non-zero.
+  assert "missing args is an error" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' text 2>/dev/null"
+  assert "unknown mode is an error" bash -c \
+    "! FSNOTES_DIR='$fixture' '$SEARCH' bogus query 2>/dev/null"
+
+  rm -rf "$fixture"
+}
+
+test_search_grep_fallback() {
+  local fixture out err
+  fixture="$(make_fixture)"
+  err="$(mktemp)"
+
+  # Shadow rg by restricting PATH to the system dirs (ripgrep lives elsewhere,
+  # e.g. /opt/homebrew/bin), forcing the grep fallback path.
+  out="$(PATH=/usr/bin:/bin FSNOTES_DIR="$fixture" \
+    bash "$SEARCH" text Milk 2>"$err")"
+  assert "grep fallback returns same hit" \
+    contains "Grocery list.markdown" "$out"
+  assert "grep fallback emits ripgrep hint" \
+    contains "ripgrep" "$(cat "$err")"
+
+  rm -rf "$fixture"
+  rm -f "$err"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -154,6 +241,8 @@ main() {
   test_plugin_manifest
   test_resolve_notes_dir
   test_sanitize_title
+  test_search
+  test_search_grep_fallback
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
