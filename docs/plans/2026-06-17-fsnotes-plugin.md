@@ -141,15 +141,15 @@ use, where the iCloud path + glob fallback applies).
 - [x] run `tests/fsnotes_test.sh` - must pass before Task 5
 
 ### Task 5: Trash (delete) script
-- [ ] create `plugins/fsnotes/scripts/fsnotes-trash.sh` sourcing the lib;
+- [x] create `plugins/fsnotes/scripts/fsnotes-trash.sh` sourcing the lib;
       move a given note file into `<notes>/Trash/`, creating `Trash/` if
       absent; never hard-delete
-- [ ] on name collision in `Trash/`, disambiguate (e.g. numeric suffix)
+- [x] on name collision in `Trash/`, disambiguate (e.g. numeric suffix)
       instead of clobbering
-- [ ] write tests: move succeeds and source no longer exists; collision in
+- [x] write tests: move succeeds and source no longer exists; collision in
       `Trash/` preserves both files; missing source → non-zero
-- [ ] run `shellcheck` on the script - must pass
-- [ ] run `tests/fsnotes_test.sh` - must pass before Task 6
+- [x] run `shellcheck` on the script - must pass
+- [x] run `tests/fsnotes_test.sh` - must pass before Task 6
 
 ### Task 6: Search subagent
 - [ ] create `plugins/fsnotes/agents/fsnotes-search.md` with frontmatter

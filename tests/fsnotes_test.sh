@@ -269,6 +269,64 @@ test_newpath() {
   rm -rf "$fixture"
 }
 
+# --- Tests: fsnotes-trash.sh -------------------------------------------------
+
+TRASH="$PLUGIN_DIR/scripts/fsnotes-trash.sh"
+
+test_trash() {
+  local fixture out
+
+  # Move succeeds: file lands in Trash/ and the source no longer exists.
+  fixture="$(make_fixture)"
+  out="$(FSNOTES_DIR="$fixture" "$TRASH" 'Grocery list.markdown')"
+  assert_eq "trash moves note into Trash/" \
+    "$fixture/Trash/Grocery list.markdown" "$out"
+  assert "trash removes the source" test ! -e "$fixture/Grocery list.markdown"
+  assert "trashed note exists in Trash/" \
+    test -f "$fixture/Trash/Grocery list.markdown"
+
+  # Trash/ is created on demand when absent.
+  rmdir "$fixture/files" 2>/dev/null || true
+  rm -rf "$fixture/Trash"
+  out="$(FSNOTES_DIR="$fixture" "$TRASH" 'Meeting notes.markdown')"
+  assert_eq "trash creates Trash/ when absent" \
+    "$fixture/Trash/Meeting notes.markdown" "$out"
+  rm -rf "$fixture"
+
+  # Collision in Trash/ preserves both files via a numeric suffix.
+  fixture="$(make_fixture)"
+  printf '# Other grocery\n\nNew list.\n' > "$fixture/Grocery list.markdown"
+  printf '# Trashed grocery\n\nOld list.\n' \
+    > "$fixture/Trash/Grocery list.markdown"
+  out="$(FSNOTES_DIR="$fixture" "$TRASH" 'Grocery list.markdown')"
+  assert_eq "trash disambiguates on collision" \
+    "$fixture/Trash/Grocery list (1).markdown" "$out"
+  assert "trash keeps the pre-existing trashed note" \
+    test -f "$fixture/Trash/Grocery list.markdown"
+  assert "trash keeps the newly trashed note" \
+    test -f "$fixture/Trash/Grocery list (1).markdown"
+  assert "collision did not clobber original trashed content" bash -c \
+    "grep -q 'Old list' '$fixture/Trash/Grocery list.markdown'"
+  assert "newly trashed note retains its content" bash -c \
+    "grep -q 'New list' '$fixture/Trash/Grocery list (1).markdown'"
+
+  # Absolute paths and notebook-relative paths both resolve.
+  out="$(FSNOTES_DIR="$fixture" "$TRASH" 'Work/Project plan.markdown')"
+  assert_eq "trash accepts notebook-relative path" \
+    "$fixture/Trash/Project plan.markdown" "$out"
+  assert "trash removes notebook source" \
+    test ! -e "$fixture/Work/Project plan.markdown"
+
+  # Missing source → non-zero, nothing printed.
+  assert "trash fails on missing source" bash -c \
+    "! FSNOTES_DIR='$fixture' '$TRASH' 'No such note.markdown' 2>/dev/null"
+  # Missing argument → non-zero.
+  assert "trash requires a note path" bash -c \
+    "! FSNOTES_DIR='$fixture' '$TRASH' 2>/dev/null"
+
+  rm -rf "$fixture"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -279,6 +337,7 @@ main() {
   test_search
   test_search_grep_fallback
   test_newpath
+  test_trash
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
