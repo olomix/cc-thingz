@@ -355,6 +355,14 @@ test_trash() {
   assert "trash requires a note path" bash -c \
     "! FSNOTES_DIR='$fixture' '$TRASH' 2>/dev/null"
 
+  # A relative path with ".." must be rejected, not allowed to escape the store.
+  printf 'victim\n' >"$fixture/../trash_victim.markdown"
+  assert "trash rejects traversal in relative path" bash -c \
+    "! FSNOTES_DIR='$fixture' '$TRASH' '../trash_victim.markdown' 2>/dev/null"
+  assert "trash leaves the out-of-store file in place" \
+    test -e "$fixture/../trash_victim.markdown"
+  rm -f "$fixture/../trash_victim.markdown"
+
   rm -rf "$fixture"
 }
 

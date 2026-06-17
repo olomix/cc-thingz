@@ -29,7 +29,11 @@ main() {
   notes_dir="$(resolve_notes_dir)" || return 1
 
   local src="$note"
-  [[ "$src" != /* ]] && src="$notes_dir/$note"
+  if [[ "$src" != /* ]]; then
+    # Free-form note paths must not escape the store via "..".
+    guard_notebook "$note" || return 1
+    src="$notes_dir/$note"
+  fi
 
   if [[ ! -f "$src" ]]; then
     printf 'fsnotes: no such note to trash: %s\n' "$src" >&2
