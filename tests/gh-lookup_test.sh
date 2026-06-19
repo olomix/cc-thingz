@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures"
 FAKE_GH="$FIXTURE_DIR/fake-gh.sh"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GH_LOOKUP="$REPO_ROOT/plugins/gh-lookup/scripts/gh-lookup.sh"
 
 PASS_COUNT=0
 
@@ -83,10 +85,50 @@ test_harness() {
     "! '$FAKE_GH' status 2>/dev/null"
 }
 
+# --- Tests: discover mode ----------------------------------------------------
+
+test_discover() {
+  local out rc
+
+  assert "gh-lookup script exists" test -f "$GH_LOOKUP"
+  assert "gh-lookup script is executable" test -x "$GH_LOOKUP"
+
+  # Single keyword → one compact `gh <cmd> — <description>` hit.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover merge)"
+  assert_eq "discover single keyword → one hit" \
+    "gh pr merge — Merge a pull request" "$out"
+
+  # Keyword shared by several commands → multiple hits.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover create)"
+  assert "discover lists gh pr create" \
+    contains "gh pr create — Create a pull request" "$out"
+  assert "discover lists gh issue create" \
+    contains "gh issue create — Create a new issue" "$out"
+
+  # Case-insensitive match.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover MERGE)"
+  assert "discover is case-insensitive" \
+    contains "gh pr merge — Merge a pull request" "$out"
+
+  # Multi-word query: all words must be present (AND over cmd + description).
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover merge a pull request)"
+  assert_eq "discover multi-word query → single hit" \
+    "gh pr merge — Merge a pull request" "$out"
+
+  # No match → non-zero exit (1) and nothing on stdout.
+  set +e
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover zzznotacommand 2>/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "discover no-match exits 1" "1" "$rc"
+  assert_eq "discover no-match prints nothing" "" "$out"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
   test_harness
+  test_discover
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }

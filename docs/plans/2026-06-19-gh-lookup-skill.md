@@ -107,15 +107,15 @@ inventing flags.
 - [x] run `shellcheck tests/gh-lookup_test.sh tests/fixtures/fake-gh.sh` — must pass
 
 ### Task 2: Implement `discover` mode (TDD)
-- [ ] write failing tests in `tests/gh-lookup_test.sh` for `discover`:
+- [x] write failing tests in `tests/gh-lookup_test.sh` for `discover`:
       keyword match returns `gh <cmd> — <description>` lines; multiple hits;
       case-insensitive match; multi-word query; **no-match exits non-zero**
       with nothing on stdout
-- [ ] create `plugins/gh-lookup/scripts/gh-lookup.sh` with `discover` mode:
+- [x] create `plugins/gh-lookup/scripts/gh-lookup.sh` with `discover` mode:
       pipe `"$GH_BIN" reference`, search command/description lines for the
       keywords, emit compact `gh <cmd> — <description>` hits
-- [ ] handle no-match (exit code distinct from usage errors, e.g. 1)
-- [ ] run `shellcheck` on the script + tests, then run the test suite — must pass
+- [x] handle no-match (exit code distinct from usage errors, e.g. 1)
+- [x] run `shellcheck` on the script + tests, then run the test suite — must pass
 
 ### Task 3: Implement `show` mode + dispatch/errors (TDD)
 - [ ] write failing tests for `show`: returns the `--help` text for a given
