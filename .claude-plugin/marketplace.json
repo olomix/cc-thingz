@@ -8,6 +8,11 @@
       "name": "fsnotes",
       "source": "./plugins/fsnotes",
       "description": "Search, create, edit, and delete notes managed by the FSNotes macOS app via natural requests."
+    },
+    {
+      "name": "gh-lookup",
+      "source": "./plugins/gh-lookup",
+      "description": "Look up exact `gh` CLI command and flag syntax — and discover whether a `gh` command exists for a task — from the locally installed reference."
     }
   ]
 }
