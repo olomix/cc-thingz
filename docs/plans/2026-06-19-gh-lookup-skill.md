@@ -128,20 +128,20 @@ inventing flags.
 - [x] run `shellcheck` + full test suite — must pass
 
 ### Task 4: Add the `gh-lookup-search` subagent and `SKILL.md`
-- [ ] create `plugins/gh-lookup/agents/gh-lookup-search.md` mirroring
+- [x] create `plugins/gh-lookup/agents/gh-lookup-search.md` mirroring
       `fsnotes-search`: read-only (tools: Bash, Read), runs
       `"${CLAUDE_PLUGIN_ROOT}/scripts/gh-lookup.sh"`, returns compact hits for
       `discover` / the relevant excerpt for `show`, never dumps the whole manual
-- [ ] create `plugins/gh-lookup/skills/gh-lookup/SKILL.md` (frontmatter:
+- [x] create `plugins/gh-lookup/skills/gh-lookup/SKILL.md` (frontmatter:
       `name`, `description`, `allowed-tools: Bash, Task, Read`): instruct Claude
       to dispatch the `gh-lookup-search` subagent when it needs exact gh syntax
       or suspects a gh command exists for a task — `discover` to find candidates,
       `show` to confirm flags — instead of guessing
-- [ ] document the two script modes and the `${CLAUDE_PLUGIN_ROOT}` invocation
+- [x] document the two script modes and the `${CLAUDE_PLUGIN_ROOT}` invocation
       convention in `SKILL.md`
-- [ ] verify the skill `description` triggers on relevant phrasing ("what's the
+- [x] verify the skill `description` triggers on relevant phrasing ("what's the
       gh command for…", "which gh flag…", "is there a gh command to…")
-- [ ] sanity-check markdown structure against the fsnotes equivalents
+- [x] sanity-check markdown structure against the fsnotes equivalents
 
 ### Task 5: Wire the plugin into the marketplace and README
 - [ ] create `plugins/gh-lookup/.claude-plugin/plugin.json` (name, description,
