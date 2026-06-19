@@ -1,0 +1,11 @@
+{
+  "name": "gh-lookup",
+  "description": "Look up exact `gh` CLI command and flag syntax — and discover whether a `gh` command exists for a task — from the locally installed reference.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oleg Lomaka"
+  },
+  "homepage": "https://github.com/olomix/cc-thingz",
+  "repository": "https://github.com/olomix/cc-thingz",
+  "license": "MIT"
+}

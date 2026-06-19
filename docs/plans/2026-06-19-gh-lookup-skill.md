@@ -144,14 +144,14 @@ inventing flags.
 - [x] sanity-check markdown structure against the fsnotes equivalents
 
 ### Task 5: Wire the plugin into the marketplace and README
-- [ ] create `plugins/gh-lookup/.claude-plugin/plugin.json` (name, description,
+- [x] create `plugins/gh-lookup/.claude-plugin/plugin.json` (name, description,
       version `0.1.0`, author "Oleg Lomaka", homepage/repo, MIT) modeled on
       fsnotes
-- [ ] add a `gh-lookup` entry to `.claude-plugin/marketplace.json`
-- [ ] add a `## gh-lookup` section to `README.md` (what it does, the two modes,
+- [x] add a `gh-lookup` entry to `.claude-plugin/marketplace.json`
+- [x] add a `## gh-lookup` section to `README.md` (what it does, the two modes,
       install snippet, `GH_BIN` test-override note) and add
       `tests/gh-lookup_test.sh` to the Development section
-- [ ] run `shellcheck` on all shell files and the full test suite — must pass
+- [x] run `shellcheck` on all shell files and the full test suite — must pass
 
 ### Task 6: Verify acceptance criteria
 - [ ] verify Overview requirements are met: `discover` finds commands by

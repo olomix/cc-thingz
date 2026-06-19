@@ -1,7 +1,7 @@
 # olomix-cc-thingz
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin
-marketplace. It currently ships one plugin, **fsnotes**.
+marketplace. It currently ships two plugins, **fsnotes** and **gh-lookup**.
 
 ## fsnotes
 
@@ -67,15 +67,59 @@ The scripts locate the FSNotes store in this order:
 The `FSNOTES_DIR` override exists so the test suite can target a temporary
 fixture directory; in normal use it is unset and the iCloud path applies.
 
+## gh-lookup
+
+Lets Claude look up exact `gh` CLI command and flag syntax — and *discover*
+whether a `gh` command exists for a given task — from the **locally installed**
+reference, instead of guessing flags from memory (which drift between gh
+versions). It is an anti-hallucination guardrail: when Claude needs precise gh
+syntax or suspects a command might exist, it consults the installed manual
+rather than inventing flags.
+
+The logic lives in a small, deterministic shell script under
+`plugins/gh-lookup/scripts/`, so it can be unit-tested:
+
+- `gh-lookup.sh discover <keywords...>` — keyword search across all command
+  names and one-line descriptions in `gh reference`, returning compact hits
+  like `gh pr merge — Merge a pull request`. Answers "is there a gh command
+  for X?" Matching is case-insensitive and requires all keywords; exit 1
+  means no matches.
+- `gh-lookup.sh show <command words...>` — authoritative per-command detail
+  via `gh <command> --help` (exact usage and flags for the installed version),
+  e.g. `gh-lookup.sh show pr merge`.
+
+A `gh-lookup-search` subagent and the `gh-lookup` skill wire these together so
+Claude reaches for the manual on "what's the gh command for…", "which gh
+flag…", and "is there a gh command to…" requests, returning compact results.
+
+### Install
+
+```
+/plugin marketplace add olomix/cc-thingz
+/plugin install gh-lookup
+```
+
+### gh binary resolution
+
+All `gh` calls go through a `GH_BIN` variable (`GH_BIN="${GH_BIN:-gh}"`). The
+override exists so the test suite can point at a fake `gh` stub; in normal use
+it is unset and the real `gh` on `PATH` applies.
+
 ## Development
 
 ```
 shellcheck tests/fsnotes_test.sh plugins/fsnotes/scripts/*.sh
 tests/fsnotes_test.sh
+
+shellcheck tests/gh-lookup_test.sh plugins/gh-lookup/scripts/*.sh \
+  tests/fixtures/fake-gh.sh
+tests/gh-lookup_test.sh
 ```
 
-Tests are pure bash with no external framework. They build a temporary
-fixture store via `FSNOTES_DIR` and never touch the real iCloud notes.
+Tests are pure bash with no external framework. The fsnotes tests build a
+temporary fixture store via `FSNOTES_DIR` and never touch the real iCloud
+notes; the gh-lookup tests stub `gh` via `GH_BIN` and synthetic fixtures, so
+they never call the real binary or the network.
 
 ## License
 
