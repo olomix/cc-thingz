@@ -1,0 +1,29 @@
+# gh reference
+
+## gh pr <command>
+
+Manage pull requests
+
+### gh pr create [flags]
+
+Create a pull request
+
+### gh pr merge [<number> | <url> | <branch>] [flags]
+
+Merge a pull request
+
+## gh issue <command>
+
+Manage issues
+
+### gh issue create [flags]
+
+Create a new issue
+
+## gh widget <command>
+
+Manage widgets (synthetic)
+
+### gh widget make [flags]
+
+Make a new widget

@@ -1,0 +1,22 @@
+Merge a pull request on GitHub.
+
+Without an argument, the pull request that belongs to the current branch
+is selected.
+
+USAGE
+  gh pr merge [<number> | <url> | <branch>] [flags]
+
+FLAGS
+      --admin               Use administrator privileges to merge a pull request
+      --auto                Automatically merge only after requirements are met
+  -d, --delete-branch       Delete the local and remote branch after merge
+  -m, --merge               Merge the commits with the base branch
+  -r, --rebase              Rebase the commits onto the base branch
+  -s, --squash              Squash the commits into one commit and merge it
+
+INHERITED FLAGS
+      --help                     Show help for command
+  -R, --repo [HOST/]OWNER/REPO   Select another repository
+
+LEARN MORE
+  Use `gh <command> <subcommand> --help` for more information about a command.

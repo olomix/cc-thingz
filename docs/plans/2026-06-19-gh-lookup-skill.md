@@ -93,18 +93,18 @@ inventing flags.
 ## Implementation Steps
 
 ### Task 1: Confirm `gh reference` format and build the test harness
-- [ ] run `gh reference` and note the exact shape of command headers and
+- [x] run `gh reference` and note the exact shape of command headers and
       one-line descriptions (record findings in this plan's Technical Details)
-- [ ] create `tests/fixtures/fake-gh.sh`: a stub that, given `reference`, cats
+- [x] create `tests/fixtures/fake-gh.sh`: a stub that, given `reference`, cats
       a synthetic reference fixture, and given `<cmd...> --help`, cats a
       synthetic help fixture (keyed by command); honors no network/auth
-- [ ] create `tests/fixtures/gh-reference-sample.txt`: a **small synthetic**
+- [x] create `tests/fixtures/gh-reference-sample.txt`: a **small synthetic**
       reference (e.g. fake `gh pr merge`, `gh issue create`, `gh widget make`)
       matching the real format — never the real manual
-- [ ] create one or more synthetic `--help` fixtures used by `show` tests
-- [ ] add a test bootstrap in `tests/gh-lookup_test.sh` that points `GH_BIN`
+- [x] create one or more synthetic `--help` fixtures used by `show` tests
+- [x] add a test bootstrap in `tests/gh-lookup_test.sh` that points `GH_BIN`
       at `fake-gh.sh` and provides assert helpers (mirror `fsnotes_test.sh`)
-- [ ] run `shellcheck tests/gh-lookup_test.sh tests/fixtures/fake-gh.sh` — must pass
+- [x] run `shellcheck tests/gh-lookup_test.sh tests/fixtures/fake-gh.sh` — must pass
 
 ### Task 2: Implement `discover` mode (TDD)
 - [ ] write failing tests in `tests/gh-lookup_test.sh` for `discover`:
@@ -178,9 +178,28 @@ inventing flags.
   through `"$GH_BIN"`. Tests set `GH_BIN` to `tests/fixtures/fake-gh.sh`.
 - **Exit codes:** `0` success; `1` no matches (discover); `2` usage error
   (unknown mode / missing args); `3` gh not found / `gh reference` unavailable.
-- **`gh reference` format:** *(fill in during Task 1)* — record how command
-  names and descriptions appear so the `discover` parser matches them; the
-  synthetic fixture must reproduce that exact shape.
+- **`gh reference` format:** (confirmed against gh v2.95.0) the manual is a
+  single markdown-ish stream on stdout, offline, no auth. Command headers are
+  Markdown ATX headings that always start with `gh `:
+  - `## gh <group> <command>` — a command *group* (e.g. `## gh pr <command>`),
+    followed by a blank line then a one-line group description.
+  - `### gh <full command path> [usage args] [flags]` — a concrete command
+    (e.g. `### gh pr merge [<number> | <url> | <branch>] [flags]`), followed by
+    a blank line then a one-line description.
+  - Top-level commands may appear as a single `## gh <name> ...` header with no
+    deeper level (e.g. `## gh api <endpoint> [flags]`).
+  - The **command name** is the leading `gh <word> <word>...` tokens of the
+    heading, stopping at the first usage placeholder token — one beginning with
+    `[`, `{`, or `<` (e.g. heading `### gh pr merge [<number>] [flags]` →
+    command `gh pr merge`). The `discover` parser strips these placeholders.
+  - The **description** is the first non-blank line after the heading.
+  The synthetic fixture (`tests/fixtures/gh-reference-sample.txt`) reproduces
+  this exact shape with a few fake commands (`gh pr merge`, `gh issue create`,
+  `gh widget make`).
+- **`gh <cmd> --help` format:** (confirmed) freeform text — a description
+  paragraph, then `USAGE`, `FLAGS`, `INHERITED FLAGS`, and `LEARN MORE`
+  sections. `show` passes this through verbatim; fixtures live at
+  `tests/fixtures/gh-help-<cmd-words-joined-by-hyphen>.txt`.
 - **No caching:** `gh reference` is a fast local dump; run it per `discover`
   call for simplicity (revisit only if measurably slow).
 - **Subagent output discipline:** return compact hits, not the full manual —
