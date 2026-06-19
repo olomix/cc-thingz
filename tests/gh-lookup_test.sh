@@ -124,11 +124,76 @@ test_discover() {
   assert_eq "discover no-match prints nothing" "" "$out"
 }
 
+# --- Tests: show mode --------------------------------------------------------
+
+test_show() {
+  local out
+
+  # show passes the command words through to `gh <cmd> --help` verbatim.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" show pr merge)"
+  assert "show returns the help USAGE section" contains "USAGE" "$out"
+  assert "show returns the requested command's help" \
+    contains "gh pr merge" "$out"
+
+  # A second multi-word command resolves to its own help fixture.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" show issue create)"
+  assert "show passes through a second multi-word command" \
+    contains "Create a new issue" "$out"
+}
+
+# --- Tests: dispatch + errors ------------------------------------------------
+
+test_errors() {
+  local err rc
+
+  # Unknown mode → usage on stderr, exit 2.
+  set +e
+  err="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" bogusmode 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "unknown mode exits 2" "2" "$rc"
+  assert "unknown mode prints usage to stderr" contains "Usage" "$err"
+
+  # Missing mode (no args) → usage, exit 2.
+  set +e
+  err="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "missing mode exits 2" "2" "$rc"
+  assert "missing mode prints usage to stderr" contains "Usage" "$err"
+
+  # Missing query for discover → usage, exit 2.
+  set +e
+  err="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "discover missing query exits 2" "2" "$rc"
+  assert "discover missing query prints usage" contains "Usage" "$err"
+
+  # Missing query for show → usage, exit 2.
+  set +e
+  err="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" show 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "show missing query exits 2" "2" "$rc"
+  assert "show missing query prints usage" contains "Usage" "$err"
+
+  # gh binary not found → clear error on stderr, exit 3.
+  set +e
+  err="$(GH_BIN=/no/such/gh-binary "$GH_LOOKUP" discover merge 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "missing gh exits 3" "3" "$rc"
+  assert "missing gh prints a clear error" contains "gh" "$err"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
   test_harness
   test_discover
+  test_show
+  test_errors
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }

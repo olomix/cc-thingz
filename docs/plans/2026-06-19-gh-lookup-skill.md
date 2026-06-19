@@ -118,14 +118,14 @@ inventing flags.
 - [x] run `shellcheck` on the script + tests, then run the test suite — must pass
 
 ### Task 3: Implement `show` mode + dispatch/errors (TDD)
-- [ ] write failing tests for `show`: returns the `--help` text for a given
+- [x] write failing tests for `show`: returns the `--help` text for a given
       command (via stubbed gh); passes through multi-word commands
-- [ ] write failing tests for errors: unknown mode → usage on stderr, exit 2;
+- [x] write failing tests for errors: unknown mode → usage on stderr, exit 2;
       missing query → usage, exit 2; `GH_BIN` not found / `gh` missing →
       clear error, exit 3
-- [ ] implement `show` mode: `"$GH_BIN" <command words> --help`
-- [ ] implement top-level arg dispatch, `usage()`, and a `gh` presence check
-- [ ] run `shellcheck` + full test suite — must pass
+- [x] implement `show` mode: `"$GH_BIN" <command words> --help`
+- [x] implement top-level arg dispatch, `usage()`, and a `gh` presence check
+- [x] run `shellcheck` + full test suite — must pass
 
 ### Task 4: Add the `gh-lookup-search` subagent and `SKILL.md`
 - [ ] create `plugins/gh-lookup/agents/gh-lookup-search.md` mirroring
