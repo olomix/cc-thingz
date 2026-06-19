@@ -154,13 +154,13 @@ inventing flags.
 - [x] run `shellcheck` on all shell files and the full test suite — must pass
 
 ### Task 6: Verify acceptance criteria
-- [ ] verify Overview requirements are met: `discover` finds commands by
+- [x] verify Overview requirements are met: `discover` finds commands by
       keyword; `show` returns exact help; subagent + skill wire them together
-- [ ] verify error/edge cases (unknown mode, missing query, gh absent, no match)
-- [ ] run `tests/gh-lookup_test.sh` (and `tests/fsnotes_test.sh` to confirm no
+- [x] verify error/edge cases (unknown mode, missing query, gh absent, no match)
+- [x] run `tests/gh-lookup_test.sh` (and `tests/fsnotes_test.sh` to confirm no
       regression in shared conventions)
-- [ ] run `shellcheck` across `tests/*.sh` and `plugins/*/scripts/*.sh` — clean
-- [ ] confirm no real personal data or full-manual content was committed
+- [x] run `shellcheck` across `tests/*.sh` and `plugins/*/scripts/*.sh` — clean
+- [x] confirm no real personal data or full-manual content was committed
 
 ### Task 7: [Final] Documentation polish
 - [ ] re-read README additions for accuracy and tone consistency with fsnotes
