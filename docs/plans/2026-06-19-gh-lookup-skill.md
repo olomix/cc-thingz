@@ -163,8 +163,8 @@ inventing flags.
 - [x] confirm no real personal data or full-manual content was committed
 
 ### Task 7: [Final] Documentation polish
-- [ ] re-read README additions for accuracy and tone consistency with fsnotes
-- [ ] ensure SKILL.md and the subagent agree on modes and output shape
+- [x] re-read README additions for accuracy and tone consistency with fsnotes
+- [x] ensure SKILL.md and the subagent agree on modes and output shape
 
 *Note: ralphex automatically moves completed plans to `docs/plans/completed/`.*
 
