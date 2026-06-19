@@ -139,6 +139,17 @@ test_discover() {
   set -e
   assert_eq "discover empty keyword exits 2" "2" "$rc"
   assert_eq "discover empty keyword prints nothing on stdout" "" "$out"
+
+  # An unsupported/failed `gh reference` (older gh) must surface as a clear
+  # exit 3, not a false no-match (exit 1).
+  local err
+  set +e
+  err="$(FAKE_GH_FAIL_REFERENCE=1 GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover merge 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "discover with unsupported gh reference exits 3" "3" "$rc"
+  assert "discover unsupported reference prints a clear error" \
+    contains "reference" "$err"
 }
 
 # --- Tests: show mode --------------------------------------------------------

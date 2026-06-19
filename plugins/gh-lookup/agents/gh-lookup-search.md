@@ -42,7 +42,8 @@ flags.
 - `0` — success (matches printed / help shown).
 - `1` — no matches for a `discover` query.
 - `2` — usage error (unknown mode or missing arguments).
-- `3` — `gh` is not installed / not on PATH.
+- `3` — `gh` is not installed / not on PATH, or `gh reference` is
+  unsupported in this gh version.
 
 ## What to return
 

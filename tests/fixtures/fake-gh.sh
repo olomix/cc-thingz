@@ -12,6 +12,11 @@ set -euo pipefail
 FIXTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${1:-}" == "reference" ]]; then
+  # Simulate an older gh where `reference` is unsupported, for exit-3 tests.
+  if [[ -n "${FAKE_GH_FAIL_REFERENCE:-}" ]]; then
+    printf 'unknown command "reference" for "gh"\n' >&2
+    exit 1
+  fi
   cat "$FIXTURE_DIR/gh-reference-sample.txt"
   exit 0
 fi

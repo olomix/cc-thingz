@@ -66,8 +66,19 @@ discover() {
     lkeywords+=("$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')")
   done
 
+  # `gh reference` only exists in recent gh releases. Capture it separately
+  # from parsing so an unsupported/failed `reference` becomes a clear exit 3,
+  # not an empty result that looks identical to a legitimate no-match (exit 1).
+  local raw
+  if ! raw="$("$GH_BIN" reference)"; then
+    # The backticks below are literal text in the message, not a substitution.
+    # shellcheck disable=SC2016
+    printf 'gh-lookup: `%s reference` failed (unsupported in this gh version?)\n' \
+      "$GH_BIN" >&2
+    return 3
+  fi
   local records
-  records="$("$GH_BIN" reference | parse_reference)"
+  records="$(printf '%s\n' "$raw" | parse_reference)"
 
   local found=0 cmd desc hay lkw match
   while IFS=$'\t' read -r cmd desc; do
