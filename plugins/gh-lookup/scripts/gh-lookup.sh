@@ -47,18 +47,34 @@ parse_reference() {
 # all of the (case-insensitive) keywords, as `gh <cmd> — <description>`.
 # Exit 1 when nothing matches.
 discover() {
-  local -a keywords=("$@")
+  # Drop empty keywords; an empty string is a substring of every line and
+  # would otherwise dump the whole manual. Reject if nothing usable remains.
+  local kw
+  local -a keywords=()
+  for kw in "$@"; do
+    [[ -n "$kw" ]] && keywords+=("$kw")
+  done
+  if (( ${#keywords[@]} == 0 )); then
+    printf 'gh-lookup: discover requires a non-empty keyword\n' >&2
+    return 2
+  fi
+
+  # Lowercase each keyword once up front; the record loop runs per command,
+  # so re-lowercasing inside it would fork `tr` N×K times over the manual.
+  local -a lkeywords=()
+  for kw in "${keywords[@]}"; do
+    lkeywords+=("$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')")
+  done
 
   local records
   records="$("$GH_BIN" reference | parse_reference)"
 
-  local found=0 cmd desc hay kw lkw match
+  local found=0 cmd desc hay lkw match
   while IFS=$'\t' read -r cmd desc; do
     [[ -n "$cmd" ]] || continue
     hay="$(printf '%s %s' "$cmd" "$desc" | tr '[:upper:]' '[:lower:]')"
     match=1
-    for kw in "${keywords[@]}"; do
-      lkw="$(printf '%s' "$kw" | tr '[:upper:]' '[:lower:]')"
+    for lkw in "${lkeywords[@]}"; do
       if [[ "$hay" != *"$lkw"* ]]; then
         match=0
         break

@@ -92,6 +92,12 @@ A `gh-lookup-search` subagent and the `gh-lookup` skill wire these together so
 Claude reaches for the manual on "what's the gh command for…", "which gh
 flag…", and "is there a gh command to…" requests, returning compact results.
 
+### Requirements
+
+Requires the GitHub CLI (`gh`) on `PATH`. The `discover` mode relies on
+`gh reference`, available in recent `gh` releases (verified against gh
+v2.95.0). `show` (`gh <command> --help`) works on any version.
+
 ### Install
 
 ```

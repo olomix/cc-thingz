@@ -105,6 +105,14 @@ test_discover() {
   assert "discover lists gh issue create" \
     contains "gh issue create — Create a new issue" "$out"
 
+  # Match on the command name, not just the description: "pr" appears only in
+  # the command names, never in any description.
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover pr)"
+  assert "discover matches on command name" \
+    contains "gh pr merge — Merge a pull request" "$out"
+  assert "discover name match lists gh pr create" \
+    contains "gh pr create — Create a pull request" "$out"
+
   # Case-insensitive match.
   out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover MERGE)"
   assert "discover is case-insensitive" \
@@ -122,6 +130,15 @@ test_discover() {
   set -e
   assert_eq "discover no-match exits 1" "1" "$rc"
   assert_eq "discover no-match prints nothing" "" "$out"
+
+  # Empty keyword is a substring of everything; it must be rejected (exit 2)
+  # rather than dumping the whole manual.
+  set +e
+  out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" discover "" 2>/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "discover empty keyword exits 2" "2" "$rc"
+  assert_eq "discover empty keyword prints nothing on stdout" "" "$out"
 }
 
 # --- Tests: show mode --------------------------------------------------------
@@ -139,6 +156,14 @@ test_show() {
   out="$(GH_BIN="$FAKE_GH" "$GH_LOOKUP" show issue create)"
   assert "show passes through a second multi-word command" \
     contains "Create a new issue" "$out"
+
+  # An unknown command must propagate gh's non-zero exit, not swallow it.
+  local rc
+  set +e
+  GH_BIN="$FAKE_GH" "$GH_LOOKUP" show no such cmd >/dev/null 2>&1
+  rc=$?
+  set -e
+  assert "show propagates failure on unknown command" test "$rc" -ne 0
 }
 
 # --- Tests: dispatch + errors ------------------------------------------------
