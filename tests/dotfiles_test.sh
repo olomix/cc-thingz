@@ -280,32 +280,60 @@ test_skill_uses_array_variable() {
     contains '"${dfgit[@]}"' "$(cat "$SKILL_MD")"
 }
 
-# Positive behavior under a shell: with a colliding `dotfiles` alias active,
-# the array-variable pattern must run git and exit 0 with no parse error /
-# "defining function based on alias" on stderr. <shell> <extra-args...> lets
-# the caller turn on interactive alias expansion (zsh -i).
-assert_array_pattern_runs() {
-  local shell="$1"
-  shift
-  local script err status
-  # Define a colliding alias, then exercise the documented pattern. `--version`
-  # avoids needing a real repo while still proving git was invoked. The script
-  # is a literal run by the target shell; nothing here should expand now.
+# The documented array-variable wrapper and the banned function wrapper, as
+# literal snippets a shell will source. `$git_dir`/`$work_tree` are expanded by
+# the target shell (set in the harness below), not here, hence single quotes.
+# `--version` proves git ran without needing a real repo.
+# shellcheck disable=SC2016
+ARRAY_SNIPPET='dfgit=(git --git-dir="$git_dir" --work-tree="$work_tree")
+"${dfgit[@]}" --version >/dev/null'
+# shellcheck disable=SC2016
+FUNCTION_SNIPPET='dotfiles() { git --git-dir="$git_dir" --work-tree="$work_tree" "$@"; }
+dotfiles --version >/dev/null'
+
+# Run <snippet> under <shell> <extra-args...> with colliding `dotfiles`/`df`
+# aliases active; report results via globals RWA_OUT (stderr) and RWA_STATUS.
+#
+# The snippet is *sourced* from a temp file, not inlined into the `-c` string.
+# This matters: whether an alias defined earlier in a single `-c` string is in
+# effect for code lexed later in that same string is option-dependent in zsh
+# (under `-f` the inline form does NOT see it). `source` lexes the file at
+# execution time, when the alias is unconditionally active -- so this faithfully
+# reproduces "the alias already exists when the wrapper is parsed". `-f` (passed
+# by callers) keeps zsh hermetic against the user's real ~/.zshrc, which may
+# define its own `dotfiles` alias/function.
+run_with_colliding_alias() {
+  local shell="$1" snippet="$2"
+  shift 2
+  local inner script
+  inner="$(mktemp)"
+  printf '%s\n' "$snippet" > "$inner"
+  # The aliases/vars are literal setup for the target shell; only "$inner" is
+  # interpolated here (to point source at the temp file).
   # shellcheck disable=SC2016
   script='alias dotfiles="git --git-dir=/x --work-tree=/y"
 alias df="git --git-dir=/x --work-tree=/y"
 git_dir="/tmp/x"; work_tree="/tmp/y"
-dfgit=(git --git-dir="$git_dir" --work-tree="$work_tree")
-"${dfgit[@]}" --version >/dev/null'
+source "'"$inner"'"'
   set +e
-  err="$("$shell" "$@" -c "$script" 2>&1 >/dev/null)"
-  status=$?
+  RWA_OUT="$("$shell" "$@" -c "$script" 2>&1 >/dev/null)"
+  RWA_STATUS=$?
   set -e
-  assert_eq "$shell: array pattern with colliding alias exits 0" "0" "$status"
+  rm -f "$inner"
+}
+
+# Positive behavior: with a colliding `dotfiles` alias active, the array-variable
+# pattern must run git and exit 0 with no parse error / "defining function based
+# on alias" on stderr.
+assert_array_pattern_runs() {
+  local shell="$1"
+  shift
+  run_with_colliding_alias "$shell" "$ARRAY_SNIPPET" "$@"
+  assert_eq "$shell: array pattern with colliding alias exits 0" "0" "$RWA_STATUS"
   assert "$shell: array pattern emits no parse error" \
-    not_contains "parse error" "$err"
+    not_contains "parse error" "$RWA_OUT"
   assert "$shell: array pattern does not collide with the alias" \
-    not_contains "defining function based on alias" "$err"
+    not_contains "defining function based on alias" "$RWA_OUT"
 }
 
 test_array_pattern_runs_in_bash() {
@@ -320,7 +348,27 @@ test_array_pattern_runs_in_zsh() {
     printf 'skip - zsh not installed; skipping interactive-zsh check\n'
     return 0
   fi
-  assert_array_pattern_runs zsh -i
+  assert_array_pattern_runs zsh -f -i
+}
+
+# Negative control: prove the harness genuinely activates the alias. Run the
+# *banned* function-wrapper form through the exact same setup; under interactive
+# zsh it must fail with the original bug (`defining function based on alias`).
+# Without this, the positive test above would pass even if the alias were inert,
+# because the array form is alias-proof either way -- this is what makes the
+# positive result meaningful, and proves the test faithfully reproduces the
+# collision. Bash deliberately has no such check: it permits a function whose
+# name shadows an alias, so there is nothing to collide.
+test_function_wrapper_collides_in_zsh() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    printf 'skip - zsh not installed; skipping function-collision control\n'
+    return 0
+  fi
+  run_with_colliding_alias zsh "$FUNCTION_SNIPPET" -f -i
+  assert "zsh: banned function wrapper collides with the alias" \
+    contains "defining function based on alias" "$RWA_OUT"
+  assert "zsh: banned function wrapper exits non-zero" \
+    test "$RWA_STATUS" -ne 0
 }
 
 # --- Runner ------------------------------------------------------------------
@@ -339,6 +387,7 @@ main() {
   test_skill_uses_array_variable
   test_array_pattern_runs_in_bash
   test_array_pattern_runs_in_zsh
+  test_function_wrapper_collides_in_zsh
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
