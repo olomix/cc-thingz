@@ -58,35 +58,36 @@ payload() {
   jq -n --arg p "$1" '{tool_name: "Edit", tool_input: {file_path: $p}}'
 }
 
-# make_fixture : build a temp bare repo + work-tree with one tracked file.
-# Echoes "<git_dir> <work_tree>". The tracked file is "tracked.conf".
+# make_fixture [tracked_name] : build a temp bare repo + work-tree with one
+# tracked file (default name "tracked.conf"). Sets globals FX_GIT_DIR and
+# FX_WORK_TREE rather than echoing a space-joined string, so paths and file
+# names containing spaces survive intact.
 make_fixture() {
-  local work_tree git_dir
-  work_tree="$(mktemp -d)"
-  git_dir="$(mktemp -d)/dotfiles.git"
-  git init --bare --quiet "$git_dir"
+  local tracked_name="${1:-tracked.conf}"
+  FX_WORK_TREE="$(mktemp -d)"
+  FX_GIT_DIR="$(mktemp -d)/dotfiles.git"
+  git init --bare --quiet "$FX_GIT_DIR"
 
-  printf 'alias ll="ls -l"\n' > "$work_tree/tracked.conf"
-  git --git-dir="$git_dir" --work-tree="$work_tree" \
+  printf 'alias ll="ls -l"\n' > "$FX_WORK_TREE/$tracked_name"
+  git --git-dir="$FX_GIT_DIR" --work-tree="$FX_WORK_TREE" \
     -c user.name="Test" -c user.email="test@example.com" \
-    add -- "$work_tree/tracked.conf"
-  git --git-dir="$git_dir" --work-tree="$work_tree" \
+    add -- "$FX_WORK_TREE/$tracked_name"
+  git --git-dir="$FX_GIT_DIR" --work-tree="$FX_WORK_TREE" \
     -c user.name="Test" -c user.email="test@example.com" \
-    commit --quiet -m "add tracked.conf"
-
-  printf '%s %s' "$git_dir" "$work_tree"
+    commit --quiet -m "add $tracked_name"
 }
 
 # --- Tests: dotfiles-tracked.sh ----------------------------------------------
 
 test_tracked_file_prompts_commit() {
-  local fx git_dir work_tree out
-  fx="$(make_fixture)"
-  git_dir="${fx% *}"
-  work_tree="${fx#* }"
+  local git_dir work_tree out ctx
+  make_fixture
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
 
   out="$(payload "$work_tree/tracked.conf" | \
     DOTFILES_GIT_DIR="$git_dir" DOTFILES_WORK_TREE="$work_tree" "$TRACKED")"
+  ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
 
   assert "tracked file yields valid JSON" is_json "$out"
   assert "tracked output has systemMessage" \
@@ -95,19 +96,21 @@ test_tracked_file_prompts_commit() {
     contains "tracked.conf" "$(printf '%s' "$out" | jq -r '.systemMessage')"
   assert_eq "tracked output sets hookEventName" "PostToolUse" \
     "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')"
-  assert "tracked output instructs to commit" contains "commit" \
-    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
-  assert "tracked output shows the git command" contains "git --git-dir" \
-    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')"
+  # The commit command is load-bearing output: assert it names the actual file
+  # and contains a real add + commit sequence, not just the substrings.
+  assert "tracked output references the edited file path" \
+    contains "$work_tree/tracked.conf" "$ctx"
+  assert "tracked output has an add command" contains "add -- " "$ctx"
+  assert "tracked output has a commit command" contains "commit -m" "$ctx"
 
   rm -rf "$work_tree" "${git_dir%/*}"
 }
 
 test_untracked_file_is_silent() {
-  local fx git_dir work_tree out
-  fx="$(make_fixture)"
-  git_dir="${fx% *}"
-  work_tree="${fx#* }"
+  local git_dir work_tree out
+  make_fixture
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
 
   printf 'untracked\n' > "$work_tree/other.conf"
   out="$(payload "$work_tree/other.conf" | \
@@ -131,10 +134,10 @@ test_missing_repo_is_silent() {
 }
 
 test_file_outside_work_tree_is_silent() {
-  local fx git_dir work_tree outside out
-  fx="$(make_fixture)"
-  git_dir="${fx% *}"
-  work_tree="${fx#* }"
+  local git_dir work_tree outside out
+  make_fixture
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
 
   outside="$(mktemp -d)"
   printf 'x\n' > "$outside/tracked.conf"
@@ -146,14 +149,49 @@ test_file_outside_work_tree_is_silent() {
 }
 
 test_empty_path_is_silent() {
-  local fx git_dir work_tree out
-  fx="$(make_fixture)"
-  git_dir="${fx% *}"
-  work_tree="${fx#* }"
+  local git_dir work_tree out
+  make_fixture
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
 
   out="$(jq -n '{tool_input: {}}' | \
     DOTFILES_GIT_DIR="$git_dir" DOTFILES_WORK_TREE="$work_tree" "$TRACKED")"
   assert_eq "empty file_path produces no output" "" "$out"
+
+  rm -rf "$work_tree" "${git_dir%/*}"
+}
+
+# A non-JSON payload must not make the hook exit non-zero or print anything —
+# otherwise a malformed harness payload would surface a hook error on every edit.
+test_malformed_payload_is_silent() {
+  local git_dir work_tree out status
+  make_fixture
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
+
+  set +e
+  out="$(printf 'not json at all' | \
+    DOTFILES_GIT_DIR="$git_dir" DOTFILES_WORK_TREE="$work_tree" "$TRACKED" 2>/dev/null)"
+  status=$?
+  set -e
+  assert_eq "malformed payload exits 0" "0" "$status"
+  assert_eq "malformed payload produces no output" "" "$out"
+
+  rm -rf "$work_tree" "${git_dir%/*}"
+}
+
+# The plan requires tracked-file detection to be robust to paths with spaces.
+test_tracked_file_with_spaces() {
+  local git_dir work_tree out
+  make_fixture "my config.conf"
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
+
+  out="$(payload "$work_tree/my config.conf" | \
+    DOTFILES_GIT_DIR="$git_dir" DOTFILES_WORK_TREE="$work_tree" "$TRACKED")"
+  assert "spaced tracked file yields valid JSON" is_json "$out"
+  assert "spaced tracked output names the file" \
+    contains "my config.conf" "$(printf '%s' "$out" | jq -r '.systemMessage')"
 
   rm -rf "$work_tree" "${git_dir%/*}"
 }
@@ -185,6 +223,8 @@ main() {
   test_missing_repo_is_silent
   test_file_outside_work_tree_is_silent
   test_empty_path_is_silent
+  test_malformed_payload_is_silent
+  test_tracked_file_with_spaces
   test_hooks_json_is_valid_and_wired
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"

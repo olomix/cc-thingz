@@ -21,7 +21,9 @@ work_tree="${DOTFILES_WORK_TREE:-$HOME}"
 command -v jq >/dev/null 2>&1 || exit 0
 
 payload="$(cat)"
-file_path="$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty')"
+# Suppress jq errors and no-op on malformed input: a non-JSON payload must not
+# make this hook exit non-zero (that would surface a hook error on every edit).
+file_path="$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/null)" || exit 0
 [[ -n "$file_path" ]] || exit 0
 
 # Tracked check. Non-zero means untracked or outside the work-tree → no-op.
