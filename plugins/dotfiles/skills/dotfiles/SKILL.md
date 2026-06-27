@@ -46,12 +46,18 @@ absolute path:
 If `git_dir` is not a directory, there is no dotfiles setup on this machine —
 say so and do nothing rather than guessing.
 
-In the recipes below, set these once so every command is consistent:
+In the recipes below, set these once so every command is consistent. Hold the
+git invocation in an **array variable** and call it as `"${dfgit[@]}"` — do
+**not** define a shell function or alias for it. A function/alias named
+`dotfiles` collides with the user's `dotfiles` alias (in zsh, `dotfiles() {...}`
+with that alias active is a hard parse error). A variable lives in a separate
+namespace and `"${dfgit[@]}"` is a parameter expansion the shell never
+alias-expands, so it is alias-proof in both zsh and bash:
 
 ```sh
 git_dir="${DOTFILES_GIT_DIR:-$HOME/.dotfiles}"
 work_tree="${DOTFILES_WORK_TREE:-$HOME}"
-dotfiles() { git --git-dir="$git_dir" --work-tree="$work_tree" "$@"; }
+dfgit=(git --git-dir="$git_dir" --work-tree="$work_tree")   # call: "${dfgit[@]}" <args>
 ```
 
 ## Detecting whether a file is tracked
@@ -61,7 +67,7 @@ authoritative test is `ls-files --error-unmatch`: it exits 0 when the path is
 tracked and non-zero when it is untracked or lies outside the work-tree.
 
 ```sh
-if dotfiles ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+if "${dfgit[@]}" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
   echo "tracked"
 else
   echo "not tracked"
@@ -77,8 +83,8 @@ Add a new file under version control (then commit). Pass the path to
 index already holds unrelated staged changes:
 
 ```sh
-dotfiles add -- "$file"
-dotfiles commit --only -m "Add <file>" -- "$file"
+"${dfgit[@]}" add -- "$file"
+"${dfgit[@]}" commit --only -m "Add <file>" -- "$file"
 ```
 
 Stage and commit an existing tracked file's change. `commit --only` takes the
@@ -86,29 +92,29 @@ working-tree content of the named path directly — no separate `add`, and other
 staged paths are left untouched:
 
 ```sh
-dotfiles commit --only -m "<message>" -- "$file"
+"${dfgit[@]}" commit --only -m "<message>" -- "$file"
 ```
 
 See what changed (working tree vs. last commit), or only staged changes:
 
 ```sh
-dotfiles diff -- "$file"
-dotfiles diff --staged -- "$file"
+"${dfgit[@]}" diff -- "$file"
+"${dfgit[@]}" diff --staged -- "$file"
 ```
 
 Inspect history:
 
 ```sh
-dotfiles status
-dotfiles log --oneline -- "$file"
+"${dfgit[@]}" status
+"${dfgit[@]}" log --oneline -- "$file"
 ```
 
 Roll back: discard an uncommitted change, or restore a file to an earlier
 commit:
 
 ```sh
-dotfiles checkout -- "$file"            # discard working-tree change
-dotfiles checkout <commit> -- "$file"   # restore from a past commit
+"${dfgit[@]}" checkout -- "$file"            # discard working-tree change
+"${dfgit[@]}" checkout <commit> -- "$file"   # restore from a past commit
 ```
 
 ## `status.showUntrackedFiles no`
@@ -145,5 +151,5 @@ message, then on consent commit only this file (so unrelated staged changes in
 the shared dotfiles index are not swept in):
 
 ```sh
-dotfiles commit --only -m "<message>" -- "$file"
+"${dfgit[@]}" commit --only -m "<message>" -- "$file"
 ```
