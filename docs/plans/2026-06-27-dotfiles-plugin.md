@@ -97,31 +97,31 @@
       verification for this task.
 
 ### Task 2: Tracked-file detection script
-- [ ] Create `plugins/dotfiles/scripts/dotfiles-tracked.sh` (executable,
+- [x] Create `plugins/dotfiles/scripts/dotfiles-tracked.sh` (executable,
       `#!/usr/bin/env bash`, `set -euo pipefail`).
-- [ ] Resolve config machine-independently: `git_dir=${DOTFILES_GIT_DIR:-$HOME/.dotfiles}`,
+- [x] Resolve config machine-independently: `git_dir=${DOTFILES_GIT_DIR:-$HOME/.dotfiles}`,
       `work_tree=${DOTFILES_WORK_TREE:-$HOME}`. If `git_dir` is not a directory,
       `exit 0` (silent no-op).
-- [ ] Read the hook payload from **stdin**; extract `.tool_input.file_path` via
+- [x] Read the hook payload from **stdin**; extract `.tool_input.file_path` via
       `jq` (guard: if `jq` missing or path empty, `exit 0`).
-- [ ] Determine tracked status with
+- [x] Determine tracked status with
       `git --git-dir="$git_dir" --work-tree="$work_tree" ls-files
       --error-unmatch -- "$file_path"` (suppress output; non-zero = not tracked
       or outside work-tree → `exit 0`).
-- [ ] When tracked, print stdout JSON via `jq -n` containing both `systemMessage`
+- [x] When tracked, print stdout JSON via `jq -n` containing both `systemMessage`
       and `hookSpecificOutput.{hookEventName:"PostToolUse", additionalContext}`.
       The message states the file is a tracked dotfile, instructs Claude to ask
       the user whether to commit **and to offer a commit message**, and shows the
       exact `git --git-dir=... --work-tree=... add/commit` invocation. `exit 0`.
-- [ ] Make the script robust to paths with spaces (quote everything; use `--`).
-- [ ] Write `tests/dotfiles_test.sh`: build temp `work_tree` + `git init --bare`
+- [x] Make the script robust to paths with spaces (quote everything; use `--`).
+- [x] Write `tests/dotfiles_test.sh`: build temp `work_tree` + `git init --bare`
       `git_dir`; add & commit one file. Assert: (a) tracked file path on stdin →
       stdout is valid JSON containing the commit prompt; (b) untracked file → no
       output, exit 0; (c) `DOTFILES_GIT_DIR` pointing at a non-existent dir → no
       output, exit 0; (d) file path outside `work_tree` → no output, exit 0.
-- [ ] Run `shellcheck plugins/dotfiles/scripts/dotfiles-tracked.sh
+- [x] Run `shellcheck plugins/dotfiles/scripts/dotfiles-tracked.sh
       tests/dotfiles_test.sh` and fix all findings.
-- [ ] Run `tests/dotfiles_test.sh` — must pass before next task.
+- [x] Run `tests/dotfiles_test.sh` — must pass before next task.
 
 ### Task 3: PostToolUse hook configuration
 - [ ] Create `plugins/dotfiles/hooks/hooks.json` with a `PostToolUse` entry,
