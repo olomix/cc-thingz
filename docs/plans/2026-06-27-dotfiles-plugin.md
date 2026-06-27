@@ -133,22 +133,22 @@
 - [x] Run `tests/dotfiles_test.sh` — must pass before next task.
 
 ### Task 4: Skill that teaches the dotfiles workflow
-- [ ] Create `plugins/dotfiles/skills/dotfiles/SKILL.md` with YAML frontmatter
+- [x] Create `plugins/dotfiles/skills/dotfiles/SKILL.md` with YAML frontmatter
       (`name: dotfiles`, a trigger-rich `description` covering "work with my
       dotfiles / bare repo / track a config file / commit dotfile changes",
       `allowed-tools: Bash`).
-- [ ] Body teaches: the bare-repo model and the `dotfiles` wrapper
+- [x] Body teaches: the bare-repo model and the `dotfiles` wrapper
       (`git --git-dir="$DOTFILES_GIT_DIR" --work-tree="$DOTFILES_WORK_TREE"`,
       defaults `$HOME/.dotfiles` / `$HOME`); how to discover the repo and detect
       whether a file is tracked; add/commit/diff/log/rollback recipes;
       `status.showUntrackedFiles no` rationale; secrets caution (never add
       private keys / credentials / history files).
-- [ ] Body states the **commit-prompt rule** as durable instruction: after
+- [x] Body states the **commit-prompt rule** as durable instruction: after
       editing any file tracked in the dotfiles repo, ask the user whether to
       commit and **offer a proposed commit message**; commit only on consent.
       This backs up the hook (hook = trigger, skill = instruction).
-- [ ] Use only placeholder paths / `$HOME` — no personal data.
-- [ ] No automated test for prose; verification is the self-review in Task 6.
+- [x] Use only placeholder paths / `$HOME` — no personal data.
+- [x] No automated test for prose; verification is the self-review in Task 6.
 
 ### Task 5: Plugin README (setup guide)
 - [ ] Create `plugins/dotfiles/README.md` explaining: what a bare-repo dotfiles
