@@ -124,13 +124,13 @@
 - [x] Run `tests/dotfiles_test.sh` — must pass before next task.
 
 ### Task 3: PostToolUse hook configuration
-- [ ] Create `plugins/dotfiles/hooks/hooks.json` with a `PostToolUse` entry,
+- [x] Create `plugins/dotfiles/hooks/hooks.json` with a `PostToolUse` entry,
       `matcher` `"Write|Edit|MultiEdit"`, one command hook invoking
       `"${CLAUDE_PLUGIN_ROOT}"/scripts/dotfiles-tracked.sh`.
-- [ ] Verify the file parses (`jq . hooks/hooks.json`).
-- [ ] Add a test assertion (extend `tests/dotfiles_test.sh`) that `hooks.json`
+- [x] Verify the file parses (`jq . hooks/hooks.json`).
+- [x] Add a test assertion (extend `tests/dotfiles_test.sh`) that `hooks.json`
       is valid JSON and the referenced script path exists & is executable.
-- [ ] Run `tests/dotfiles_test.sh` — must pass before next task.
+- [x] Run `tests/dotfiles_test.sh` — must pass before next task.
 
 ### Task 4: Skill that teaches the dotfiles workflow
 - [ ] Create `plugins/dotfiles/skills/dotfiles/SKILL.md` with YAML frontmatter

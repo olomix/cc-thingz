@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/dotfiles"
 TRACKED="$PLUGIN_DIR/scripts/dotfiles-tracked.sh"
+HOOKS_JSON="$PLUGIN_DIR/hooks/hooks.json"
 
 PASS_COUNT=0
 
@@ -157,6 +158,25 @@ test_empty_path_is_silent() {
   rm -rf "$work_tree" "${git_dir%/*}"
 }
 
+# --- Tests: hooks.json -------------------------------------------------------
+
+test_hooks_json_is_valid_and_wired() {
+  assert "hooks.json is valid JSON" is_json "$(cat "$HOOKS_JSON")"
+
+  local matcher cmd
+  matcher="$(jq -r '.hooks.PostToolUse[0].matcher' "$HOOKS_JSON")"
+  assert_eq "hooks.json matches Write|Edit|MultiEdit" \
+    "Write|Edit|MultiEdit" "$matcher"
+
+  cmd="$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "$HOOKS_JSON")"
+  assert "hook command references the bundled script" \
+    contains "dotfiles-tracked.sh" "$cmd"
+  assert "hook command uses CLAUDE_PLUGIN_ROOT" \
+    contains 'CLAUDE_PLUGIN_ROOT' "$cmd"
+
+  assert "referenced script exists and is executable" test -x "$TRACKED"
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -165,6 +185,7 @@ main() {
   test_missing_repo_is_silent
   test_file_outside_work_tree_is_silent
   test_empty_path_is_silent
+  test_hooks_json_is_valid_and_wired
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
