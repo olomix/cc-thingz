@@ -119,13 +119,13 @@
 - [x] Run `tests/dotfiles_test.sh` — all tests (existing + new) must pass.
 
 ### Task 3: Verify acceptance criteria
-- [ ] Confirm `SKILL.md` uses only the array-variable wrapper and every recipe
+- [x] Confirm `SKILL.md` uses only the array-variable wrapper and every recipe
       calls `"${dfgit[@]}"` (no `dotfiles <args>` executable recipe remains).
-- [ ] Confirm `scripts/dotfiles-tracked.sh`, both READMEs, and `hooks.json` are
+- [x] Confirm `scripts/dotfiles-tracked.sh`, both READMEs, and `hooks.json` are
       unchanged and still correct.
-- [ ] Run the full `tests/dotfiles_test.sh` suite and `shellcheck` on all shell
+- [x] Run the full `tests/dotfiles_test.sh` suite and `shellcheck` on all shell
       files — everything passes.
-- [ ] Re-scan all changed content for personal data — none present.
+- [x] Re-scan all changed content for personal data — none present.
 
 ## Technical Details
 - **Canonical wrapper (new)**:
