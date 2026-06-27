@@ -33,7 +33,15 @@ if ! git --git-dir="$git_dir" --work-tree="$work_tree" \
   exit 0
 fi
 
-commit_cmd="git --git-dir=\"$git_dir\" --work-tree=\"$work_tree\" add -- \"$file_path\" && git --git-dir=\"$git_dir\" --work-tree=\"$work_tree\" commit -m \"<message>\""
+# Shell-escape every interpolated value with %q so the suggested command stays
+# safe to run verbatim even when a tracked path contains shell metacharacters
+# (e.g. a filename like 'evil$(...).conf'). `commit --only -- <file>` stages and
+# commits only this one path, so unrelated content already staged in the shared
+# dotfiles index is never swept into the commit.
+esc_git_dir="$(printf '%q' "$git_dir")"
+esc_work_tree="$(printf '%q' "$work_tree")"
+esc_file="$(printf '%q' "$file_path")"
+commit_cmd="git --git-dir=$esc_git_dir --work-tree=$esc_work_tree commit --only -m \"<message>\" -- $esc_file"
 
 system_message="$file_path is tracked in your dotfiles repo. Ask the user whether to commit this change, and offer a proposed commit message. Commit only with their consent."
 

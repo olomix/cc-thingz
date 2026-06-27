@@ -72,18 +72,21 @@ Always pass paths after `--` and quote them so names with spaces work.
 
 ## Recipes
 
-Add a new file under version control (then commit):
+Add a new file under version control (then commit). Pass the path to
+`commit --only` so only this file is committed, even if the shared dotfiles
+index already holds unrelated staged changes:
 
 ```sh
 dotfiles add -- "$file"
-dotfiles commit -m "Add <file>"
+dotfiles commit --only -m "Add <file>" -- "$file"
 ```
 
-Stage and commit an existing tracked file's change:
+Stage and commit an existing tracked file's change. `commit --only` takes the
+working-tree content of the named path directly — no separate `add`, and other
+staged paths are left untouched:
 
 ```sh
-dotfiles add -- "$file"
-dotfiles commit -m "<message>"
+dotfiles commit --only -m "<message>" -- "$file"
 ```
 
 See what changed (working tree vs. last commit), or only staged changes:
@@ -138,8 +141,9 @@ it. Commit only with their explicit consent — never commit automatically.
 This is the same behavior the plugin's PostToolUse hook triggers (the hook is
 the trigger; this instruction is the rule that backs it up, so the prompt
 happens even if the hook output is missed). Propose a concise, descriptive
-message, then on consent run:
+message, then on consent commit only this file (so unrelated staged changes in
+the shared dotfiles index are not swept in):
 
 ```sh
-dotfiles add -- "$file" && dotfiles commit -m "<message>"
+dotfiles commit --only -m "<message>" -- "$file"
 ```

@@ -48,6 +48,14 @@ contains() {
   esac
 }
 
+# not_contains <needle> <haystack> : true when haystack lacks needle.
+not_contains() {
+  case "$2" in
+    *"$1"*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 # is_json <string> : true when the string parses as JSON.
 is_json() {
   printf '%s' "$1" | jq -e . >/dev/null 2>&1
@@ -97,11 +105,41 @@ test_tracked_file_prompts_commit() {
   assert_eq "tracked output sets hookEventName" "PostToolUse" \
     "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName')"
   # The commit command is load-bearing output: assert it names the actual file
-  # and contains a real add + commit sequence, not just the substrings.
+  # and uses a path-scoped commit, not just the substrings.
   assert "tracked output references the edited file path" \
     contains "$work_tree/tracked.conf" "$ctx"
-  assert "tracked output has an add command" contains "add -- " "$ctx"
-  assert "tracked output has a commit command" contains "commit -m" "$ctx"
+  assert "tracked output has a path-scoped commit command" \
+    contains "commit --only -m" "$ctx"
+  assert "tracked output ends the commit with the file pathspec" \
+    contains "-- $work_tree/tracked.conf" "$ctx"
+
+  rm -rf "$work_tree" "${git_dir%/*}"
+}
+
+# A tracked filename containing shell metacharacters must be %q-escaped in the
+# suggested command, so copying it into Bash cannot trigger command
+# substitution (e.g. a file literally named with a '$(...)' fragment).
+test_commit_command_escapes_shell_metacharacters() {
+  local git_dir work_tree out cmd
+  # The single-quoted name is an intentional literal, not an expansion.
+  # shellcheck disable=SC2016
+  make_fixture 'evil$(touch PWNED).conf'
+  git_dir="$FX_GIT_DIR"
+  work_tree="$FX_WORK_TREE"
+
+  out="$(payload "$work_tree/evil\$(touch PWNED).conf" | \
+    DOTFILES_GIT_DIR="$git_dir" DOTFILES_WORK_TREE="$work_tree" "$TRACKED")"
+  # Isolate just the suggested command (after "run: "); the descriptive prose
+  # naturally names the raw file, but only the command would be executed.
+  cmd="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' \
+    | sed 's/.*run: //')"
+
+  assert "suggested command escapes the substitution metacharacters" \
+    contains 'evil\$\(touch\ PWNED\).conf' "$cmd"
+  # Literal needle, not an expansion.
+  # shellcheck disable=SC2016
+  assert "suggested command holds no runnable substitution" \
+    not_contains '$(touch PWNED)' "$cmd"
 
   rm -rf "$work_tree" "${git_dir%/*}"
 }
@@ -219,6 +257,7 @@ test_hooks_json_is_valid_and_wired() {
 
 main() {
   test_tracked_file_prompts_commit
+  test_commit_command_escapes_shell_metacharacters
   test_untracked_file_is_silent
   test_missing_repo_is_silent
   test_file_outside_work_tree_is_silent
