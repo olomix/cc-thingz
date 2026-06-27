@@ -151,13 +151,13 @@
 - [x] No automated test for prose; verification is the self-review in Task 6.
 
 ### Task 5: Plugin README (setup guide)
-- [ ] Create `plugins/dotfiles/README.md` explaining: what a bare-repo dotfiles
+- [x] Create `plugins/dotfiles/README.md` explaining: what a bare-repo dotfiles
       setup is and why; the one-time user setup (`git init --bare`,
       `config status.showUntrackedFiles no`, the shell `dotfiles` alias);
       the optional `DOTFILES_GIT_DIR` / `DOTFILES_WORK_TREE` overrides for
       non-default locations; how installing the plugin enables the teaching skill
       and the commit-prompt hook; and the secrets caution.
-- [ ] Use placeholder paths only (public repo).
+- [x] Use placeholder paths only (public repo).
 
 ### Task 6: Verify acceptance criteria
 - [ ] Verify all Overview requirements are met: skill teaches the workflow; hook
