@@ -1,0 +1,11 @@
+{
+  "name": "dotfiles",
+  "description": "Teach Claude Code to operate a bare-repo dotfiles setup and prompt to commit whenever a tracked dotfile is edited.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oleg Lomaka"
+  },
+  "homepage": "https://github.com/olomix/cc-thingz",
+  "repository": "https://github.com/olomix/cc-thingz",
+  "license": "MIT"
+}

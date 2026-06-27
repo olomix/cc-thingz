@@ -85,15 +85,15 @@
 ## Implementation Steps
 
 ### Task 1: Scaffold the plugin and register it in the marketplace
-- [ ] Create `plugins/dotfiles/.claude-plugin/plugin.json` mirroring
+- [x] Create `plugins/dotfiles/.claude-plugin/plugin.json` mirroring
       `plugins/gh-lookup/.claude-plugin/plugin.json` (fields: `name` `dotfiles`,
       `description`, `version` `0.1.0`, `author.name` `Oleg Lomaka`, `homepage`
       & `repository` `https://github.com/olomix/cc-thingz`, `license` `MIT`).
-- [ ] Add a `dotfiles` entry to `.claude-plugin/marketplace.json` `plugins`
+- [x] Add a `dotfiles` entry to `.claude-plugin/marketplace.json` `plugins`
       array (`name`, `source` `./plugins/dotfiles`, one-line `description`),
       keeping JSON valid and consistent with existing entries.
-- [ ] Verify both JSON files parse (e.g. `jq . <file>` exits 0).
-- [ ] No test needed for static manifests; the JSON-parse check above is the
+- [x] Verify both JSON files parse (e.g. `jq . <file>` exits 0).
+- [x] No test needed for static manifests; the JSON-parse check above is the
       verification for this task.
 
 ### Task 2: Tracked-file detection script
