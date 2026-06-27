@@ -172,13 +172,13 @@
       `hooks/hooks.json`).
 
 ### Task 7: Update repository documentation
-- [ ] Add a `## dotfiles` section to the top-level `README.md` describing the
+- [x] Add a `## dotfiles` section to the top-level `README.md` describing the
       plugin (mirroring the fsnotes / gh-lookup sections), including an
       **Install** snippet (`/plugin install dotfiles`) and a
       **Repo resolution** note documenting `DOTFILES_GIT_DIR` /
       `DOTFILES_WORK_TREE` and their defaults.
-- [ ] Update the intro line ("currently ships two plugins…") to reflect three.
-- [ ] Add the new shellcheck/test commands to the **Development** section.
+- [x] Update the intro line ("currently ships two plugins…") to reflect three.
+- [x] Add the new shellcheck/test commands to the **Development** section.
 
 ## Technical Details
 - **Config resolution** (script & skill identical):
