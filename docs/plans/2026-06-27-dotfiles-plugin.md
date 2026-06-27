@@ -160,15 +160,15 @@
 - [x] Use placeholder paths only (public repo).
 
 ### Task 6: Verify acceptance criteria
-- [ ] Verify all Overview requirements are met: skill teaches the workflow; hook
+- [x] Verify all Overview requirements are met: skill teaches the workflow; hook
       prompts to commit on edits to tracked files and offers a message;
       everything is env-var configurable with safe no-op defaults; READMEs
       present.
-- [ ] Re-read every new file for placeholders/personal data; confirm no
+- [x] Re-read every new file for placeholders/personal data; confirm no
       `/Users/<name>` paths, emails, or hostnames leaked in.
-- [ ] Run `shellcheck` on all shell files — all issues fixed.
-- [ ] Run `tests/dotfiles_test.sh` — full suite passes.
-- [ ] Confirm all new JSON parses (`plugin.json`, `marketplace.json`,
+- [x] Run `shellcheck` on all shell files — all issues fixed.
+- [x] Run `tests/dotfiles_test.sh` — full suite passes.
+- [x] Confirm all new JSON parses (`plugin.json`, `marketplace.json`,
       `hooks/hooks.json`).
 
 ### Task 7: Update repository documentation
