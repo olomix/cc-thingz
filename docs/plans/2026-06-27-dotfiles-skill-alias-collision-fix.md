@@ -108,15 +108,15 @@
       lands next.)
 
 ### Task 2: Add regression tests for the alias-collision fix
-- [ ] Extend `tests/dotfiles_test.sh` with a test asserting `SKILL.md` contains
+- [x] Extend `tests/dotfiles_test.sh` with a test asserting `SKILL.md` contains
       no wrapper **function** definition (grep guard against reintroduction).
-- [ ] Add a test that, under `zsh -i` with `alias dotfiles='git ...'` active,
+- [x] Add a test that, under `zsh -i` with `alias dotfiles='git ...'` active,
       the array-variable pattern runs git and exits 0 with no `parse error` /
       `defining function based on alias` on stderr; repeat under `bash`.
-- [ ] Guard the zsh test so it skips cleanly (not fails) if `zsh` is unavailable
+- [x] Guard the zsh test so it skips cleanly (not fails) if `zsh` is unavailable
       on the runner, to keep the suite portable.
-- [ ] Run `shellcheck tests/dotfiles_test.sh` and fix all findings.
-- [ ] Run `tests/dotfiles_test.sh` — all tests (existing + new) must pass.
+- [x] Run `shellcheck tests/dotfiles_test.sh` and fix all findings.
+- [x] Run `tests/dotfiles_test.sh` — all tests (existing + new) must pass.
 
 ### Task 3: Verify acceptance criteria
 - [ ] Confirm `SKILL.md` uses only the array-variable wrapper and every recipe

@@ -9,6 +9,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/dotfiles"
 TRACKED="$PLUGIN_DIR/scripts/dotfiles-tracked.sh"
 HOOKS_JSON="$PLUGIN_DIR/hooks/hooks.json"
+SKILL_MD="$PLUGIN_DIR/skills/dotfiles/SKILL.md"
 
 PASS_COUNT=0
 
@@ -253,6 +254,75 @@ test_hooks_json_is_valid_and_wired() {
   assert "referenced script exists and is executable" test -x "$TRACKED"
 }
 
+# --- Tests: SKILL.md alias-collision fix -------------------------------------
+
+# Regression guard: the skill must NOT tell Claude to define a shell function
+# (or alias) to wrap git. A function/alias named `dotfiles` collides with the
+# user's `dotfiles` alias and is a hard parse error in zsh. Grep for any
+# function-definition line (`name() {`) inside the SKILL's code fences.
+test_skill_has_no_wrapper_function() {
+  local hits
+  # A wrapper function would look like `dotfiles() {`, `dfgit() {`, etc.
+  # Match an identifier immediately followed by `()` and an opening brace.
+  hits="$(grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{' \
+    "$SKILL_MD" || true)"
+  assert_eq "SKILL.md defines no wrapper function" "" "$hits"
+}
+
+# The skill must use the alias-proof array-variable form.
+test_skill_uses_array_variable() {
+  assert "SKILL.md defines the dfgit array variable" \
+    contains 'dfgit=(git --git-dir=' "$(cat "$SKILL_MD")"
+  # Literal needle: we are searching for this exact text in the skill, not
+  # expanding it.
+  # shellcheck disable=SC2016
+  assert "SKILL.md invokes the wrapper as a parameter expansion" \
+    contains '"${dfgit[@]}"' "$(cat "$SKILL_MD")"
+}
+
+# Positive behavior under a shell: with a colliding `dotfiles` alias active,
+# the array-variable pattern must run git and exit 0 with no parse error /
+# "defining function based on alias" on stderr. <shell> <extra-args...> lets
+# the caller turn on interactive alias expansion (zsh -i).
+assert_array_pattern_runs() {
+  local shell="$1"
+  shift
+  local script err status
+  # Define a colliding alias, then exercise the documented pattern. `--version`
+  # avoids needing a real repo while still proving git was invoked. The script
+  # is a literal run by the target shell; nothing here should expand now.
+  # shellcheck disable=SC2016
+  script='alias dotfiles="git --git-dir=/x --work-tree=/y"
+alias df="git --git-dir=/x --work-tree=/y"
+git_dir="/tmp/x"; work_tree="/tmp/y"
+dfgit=(git --git-dir="$git_dir" --work-tree="$work_tree")
+"${dfgit[@]}" --version >/dev/null'
+  set +e
+  err="$("$shell" "$@" -c "$script" 2>&1 >/dev/null)"
+  status=$?
+  set -e
+  assert_eq "$shell: array pattern with colliding alias exits 0" "0" "$status"
+  assert "$shell: array pattern emits no parse error" \
+    not_contains "parse error" "$err"
+  assert "$shell: array pattern does not collide with the alias" \
+    not_contains "defining function based on alias" "$err"
+}
+
+test_array_pattern_runs_in_bash() {
+  assert_array_pattern_runs bash
+}
+
+# Run the same check under interactive zsh (alias expansion on), which is where
+# the original `dotfiles() {...}` bug surfaced. Skip cleanly when zsh is absent
+# so the suite stays portable across runners.
+test_array_pattern_runs_in_zsh() {
+  if ! command -v zsh >/dev/null 2>&1; then
+    printf 'skip - zsh not installed; skipping interactive-zsh check\n'
+    return 0
+  fi
+  assert_array_pattern_runs zsh -i
+}
+
 # --- Runner ------------------------------------------------------------------
 
 main() {
@@ -265,6 +335,10 @@ main() {
   test_malformed_payload_is_silent
   test_tracked_file_with_spaces
   test_hooks_json_is_valid_and_wired
+  test_skill_has_no_wrapper_function
+  test_skill_uses_array_variable
+  test_array_pattern_runs_in_bash
+  test_array_pattern_runs_in_zsh
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
