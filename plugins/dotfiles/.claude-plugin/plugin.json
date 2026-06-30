@@ -1,7 +1,7 @@
 {
   "name": "dotfiles",
   "description": "Teach Claude Code to operate a bare-repo dotfiles setup and prompt to commit whenever a tracked dotfile is edited.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Oleg Lomaka"
   },
