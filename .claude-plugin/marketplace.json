@@ -13,6 +13,11 @@
       "name": "gh-lookup",
       "source": "./plugins/gh-lookup",
       "description": "Look up exact `gh` CLI command and flag syntax — and discover whether a `gh` command exists for a task — from the locally installed reference."
+    },
+    {
+      "name": "dotfiles",
+      "source": "./plugins/dotfiles",
+      "description": "Teach Claude Code to operate a bare-repo dotfiles setup and prompt to commit whenever a tracked dotfile is edited."
     }
   ]
 }

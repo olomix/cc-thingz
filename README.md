@@ -1,7 +1,8 @@
 # olomix-cc-thingz
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin
-marketplace. It currently ships two plugins, **fsnotes** and **gh-lookup**.
+marketplace. It currently ships three plugins, **fsnotes**, **gh-lookup**, and
+**dotfiles**.
 
 ## fsnotes
 
@@ -111,6 +112,52 @@ All `gh` calls go through a `GH_BIN` variable (`GH_BIN="${GH_BIN:-gh}"`). The
 override exists so the test suite can point at a fake `gh` stub; in normal use
 it is unset and the real `gh` on `PATH` applies.
 
+## dotfiles
+
+Teaches Claude to operate a **bare-repo dotfiles** setup — the git directory
+kept separate from a `$HOME` work-tree, managed through a `dotfiles` git wrapper
+— and prompts to commit whenever Claude edits a file that is *tracked* in the
+dotfiles repo. After such an edit, Claude asks whether to commit and offers a
+proposed message; it never commits without consent.
+
+The plugin has two parts:
+
+- A **`dotfiles` skill** teaching the bare-repo model and the
+  add/commit/diff/log/rollback recipes, how to detect whether a file is tracked,
+  and the secrets caution (never add private keys, credentials, or history
+  files).
+- A **PostToolUse hook** backed by a small, deterministic shell script under
+  `plugins/dotfiles/scripts/`, so it can be unit-tested:
+  - `dotfiles-tracked.sh` — reads the hook payload on stdin, checks whether the
+    edited file is tracked via
+    `git --git-dir=… --work-tree=… ls-files --error-unmatch`, and on a match
+    prints the commit prompt. If no dotfiles repo is present (or `jq` is
+    missing, or the path is untracked/external), it is a silent no-op, so the
+    plugin is harmless to install even without a dotfiles setup.
+
+See [`plugins/dotfiles/README.md`](plugins/dotfiles/README.md) for the one-time
+bare-repo setup (`git init --bare`, `status.showUntrackedFiles no`, the shell
+alias).
+
+### Install
+
+```
+/plugin marketplace add olomix/cc-thingz
+/plugin install dotfiles
+```
+
+### Repo resolution
+
+The plugin resolves the two locations from environment variables, with safe
+defaults — nothing hardcodes a username or absolute path:
+
+- `DOTFILES_GIT_DIR` — the bare repo's git directory (default `$HOME/.dotfiles`).
+- `DOTFILES_WORK_TREE` — the work-tree, your home dir (default `$HOME`).
+
+Set these only if your repo lives somewhere other than `$HOME/.dotfiles`. The
+overrides also let the test suite target a temporary sandbox; if
+`DOTFILES_GIT_DIR` does not point at a directory, the plugin stays silent.
+
 ## Development
 
 ```
@@ -120,12 +167,17 @@ tests/fsnotes_test.sh
 shellcheck tests/gh-lookup_test.sh plugins/gh-lookup/scripts/*.sh \
   tests/fixtures/fake-gh.sh
 tests/gh-lookup_test.sh
+
+shellcheck tests/dotfiles_test.sh plugins/dotfiles/scripts/*.sh
+tests/dotfiles_test.sh
 ```
 
 Tests are pure bash with no external framework. The fsnotes tests build a
 temporary fixture store via `FSNOTES_DIR` and never touch the real iCloud
 notes; the gh-lookup tests stub `gh` via `GH_BIN` and synthetic fixtures, so
-they never call the real binary or the network.
+they never call the real binary or the network; the dotfiles tests build a
+throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
+`DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`.
 
 ## License
 
