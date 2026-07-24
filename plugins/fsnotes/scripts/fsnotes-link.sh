@@ -41,7 +41,12 @@ emit() {
     # ST is ESC "\". The URI is fully percent-encoded, so the payload is ASCII.
     printf '\033]8;;%s\033\\%s\033]8;;\033\\\n' "$url" "$text"
   else
-    printf '[%s](%s)\n' "$text" "$url"
+    # Backslash-escape markdown link-text metacharacters so a title with
+    # unbalanced brackets (e.g. "Draft [WIP") still parses as a link.
+    local safe="${text//\\/\\\\}"
+    safe="${safe//\[/\\[}"
+    safe="${safe//]/\\]}"
+    printf '[%s](%s)\n' "$safe" "$url"
   fi
 }
 

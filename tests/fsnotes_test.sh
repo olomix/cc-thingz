@@ -240,6 +240,18 @@ test_link() {
   assert_eq "link osc8 framing" "$expected" \
     "$("$LINK" --osc8 find 'Grocery list')"
 
+  # --osc8 over a multi-param URL: the & joining query params stays literal in
+  # the URL while the txt value is percent-encoded.
+  expected="${esc}]8;;fsnotes://new/?title=A&txt=x%26y${esc}\\A${esc}]8;;${esc}\\"
+  assert_eq "link osc8 multi-param" "$expected" \
+    "$("$LINK" --osc8 new 'A' --txt 'x&y')"
+
+  # Unbalanced brackets in the title are backslash-escaped so the markdown link
+  # still parses; the URL side stays percent-encoded (%5B).
+  assert_eq "link escapes brackets in markdown text" \
+    "[Draft \\[WIP](fsnotes://find?id=Draft%20%5BWIP)" \
+    "$("$LINK" find 'Draft [WIP')"
+
   # Error cases (all exit non-zero, message on stderr).
   assert "link no args errors" bash -c "! '$LINK' 2>/dev/null"
   assert "link unknown route errors" bash -c "! '$LINK' bogus x 2>/dev/null"
@@ -248,6 +260,16 @@ test_link() {
     "! '$LINK' new Note --folder Trash 2>/dev/null"
   assert "link unknown flag errors" bash -c \
     "! '$LINK' find Note --bogus 2>/dev/null"
+  # --txt/--folder given without a value must error (shift-2 guard).
+  assert "link open --txt without value errors" bash -c \
+    "! '$LINK' open Note --txt 2>/dev/null"
+  assert "link new --folder without value errors" bash -c \
+    "! '$LINK' new Note --folder 2>/dev/null"
+  # Unknown flags inside the open/new argument loops must error too.
+  assert "link open unknown flag errors" bash -c \
+    "! '$LINK' open Note --bogus 2>/dev/null"
+  assert "link new unknown flag errors" bash -c \
+    "! '$LINK' new Note --bogus 2>/dev/null"
 }
 
 # --- Tests: fsnotes-search.sh ------------------------------------------------

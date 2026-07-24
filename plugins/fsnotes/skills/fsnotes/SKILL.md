@@ -78,7 +78,8 @@ outside the store is refused).
 
 FSNotes registers the `fsnotes://` URL scheme, so a reply can carry a
 clickable link straight into the app. Build every link with
-`scripts/fsnotes-link.sh` — never hand-encode a URL. The four routes:
+`scripts/fsnotes-link.sh` — never hand-encode a URL. The routes
+(`find`, `open`, `tag`, `new`):
 
 - **Referencing an existing note?** emit a `find` link — it opens the note
   by title (falling back to the search field on no match):
