@@ -172,6 +172,26 @@ test_sanitize_title() {
     bash -c "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; ! sanitize_title '...' 2>/dev/null"
 }
 
+test_urlencode() {
+  # Unreserved characters (RFC 3986) pass through untouched.
+  assert_eq "urlencode passes unreserved chars" \
+    "AZaz09.~_-" "$(urlencode 'AZaz09.~_-')"
+  # Space becomes %20, not '+'.
+  assert_eq "urlencode encodes space as %20" "a%20b" "$(urlencode 'a b')"
+  # Reserved/query characters are percent-encoded.
+  assert_eq "urlencode escapes ampersand" "a%26b" "$(urlencode 'a&b')"
+  assert_eq "urlencode escapes question mark" "a%3Fb" "$(urlencode 'a?b')"
+  assert_eq "urlencode escapes hash" "a%23b" "$(urlencode 'a#b')"
+  assert_eq "urlencode escapes slash" "a%2Fb" "$(urlencode 'a/b')"
+  assert_eq "urlencode escapes percent" "a%25b" "$(urlencode 'a%b')"
+  # Multi-byte UTF-8 is encoded per byte (Cyrillic "Заметка").
+  assert_eq "urlencode encodes UTF-8 per byte" \
+    "%D0%97%D0%B0%D0%BC%D0%B5%D1%82%D0%BA%D0%B0" \
+    "$(urlencode 'Заметка')"
+  # Empty input yields empty output.
+  assert_eq "urlencode handles empty input" "" "$(urlencode '')"
+}
+
 # --- Tests: fsnotes-search.sh ------------------------------------------------
 
 SEARCH="$PLUGIN_DIR/scripts/fsnotes-search.sh"
@@ -496,6 +516,7 @@ main() {
   test_plugin_manifest
   test_resolve_notes_dir
   test_sanitize_title
+  test_urlencode
   test_search
   test_search_grep_fallback
   test_newpath

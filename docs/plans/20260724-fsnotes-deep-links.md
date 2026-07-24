@@ -102,14 +102,14 @@ Terminal support facts (from kitty and agterm sources, verified 2026-07-24):
 
 ### Task 1: Add urlencode helper to fsnotes-lib.sh
 
-- [ ] add tests to `tests/fsnotes_test.sh` for `urlencode`: passthrough of
+- [x] add tests to `tests/fsnotes_test.sh` for `urlencode`: passthrough of
       unreserved chars (`A-Za-z0-9.~_-`), space → `%20`, `&`, `?`, `#`, `/`,
       `%` escaping, and a multi-byte UTF-8 title (e.g. `Заметка`) encoding
       per-byte
-- [ ] implement `urlencode` in `plugins/fsnotes/scripts/fsnotes-lib.sh`
+- [x] implement `urlencode` in `plugins/fsnotes/scripts/fsnotes-lib.sh`
       (pure bash; iterate bytes under `LC_ALL=C` so UTF-8 encodes correctly)
-- [ ] run `tests/fsnotes_test.sh` — must pass
-- [ ] run `shellcheck` on `fsnotes-lib.sh` and the test file — clean
+- [x] run `tests/fsnotes_test.sh` — must pass
+- [x] run `shellcheck` on `fsnotes-lib.sh` and the test file — clean
 
 ### Task 2: Create fsnotes-link.sh link builder
 

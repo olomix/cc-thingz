@@ -115,3 +115,21 @@ sanitize_title() {
   fi
   printf '%s\n' "$title"
 }
+
+# urlencode <string> : print the RFC 3986 percent-encoding of <string>.
+# Everything except the unreserved set (A-Za-z0-9.~_-) is escaped. The string
+# is walked one byte at a time under LC_ALL=C so multi-byte UTF-8 sequences are
+# encoded per byte (e.g. "З" -> "%D0%97"), matching how the FSNotes URL routes
+# expect query values. No trailing newline: callers assemble URLs inline.
+urlencode() {
+  local string="$1" out="" i c
+  local LC_ALL=C
+  for ((i = 0; i < ${#string}; i++)); do
+    c="${string:i:1}"
+    case "$c" in
+      [A-Za-z0-9.~_-]) out+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
