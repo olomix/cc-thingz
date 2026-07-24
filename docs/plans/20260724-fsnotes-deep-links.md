@@ -142,10 +142,10 @@ unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
 
 ### Task 3: Teach SKILL.md the deep links
 
-- [ ] add doc-shaped tests to `tests/fsnotes_test.sh`: SKILL.md mentions
+- [x] add doc-shaped tests to `tests/fsnotes_test.sh`: SKILL.md mentions
       `fsnotes-link.sh`, `fsnotes://find`, `fsnotes://new`, and `--osc8`;
       scripts-reference section lists the new script
-- [ ] add a "Deep links" section to
+- [x] add a "Deep links" section to
       `plugins/fsnotes/skills/fsnotes/SKILL.md`: when referencing an
       existing note in a reply, emit a `find` link via `fsnotes-link.sh`;
       when suggesting a note that doesn't exist yet, emit a `new` (or
@@ -153,9 +153,9 @@ unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
       links with the script (never hand-encode); note that markdown output
       is the default and `--osc8` is for terminals that hyperlink arbitrary
       schemes
-- [ ] update the "Scripts reference" list with
+- [x] update the "Scripts reference" list with
       `fsnotes-link.sh [--osc8] <route> <args…>`
-- [ ] run `tests/fsnotes_test.sh` — must pass
+- [x] run `tests/fsnotes_test.sh` — must pass
 
 ### Task 4: Link-enabled search agent output
 

@@ -543,11 +543,17 @@ test_skill() {
   assert_eq "skill name is fsnotes" "fsnotes" \
     "$(frontmatter "$f" | awk -F': *' '/^name:/{print $2}')"
 
-  # The skill must reference each of the four scripts.
+  # The skill must reference each of the five scripts.
   local script
   for script in fsnotes-search.sh fsnotes-newpath.sh fsnotes-trash.sh \
-    fsnotes-lib.sh; do
+    fsnotes-link.sh fsnotes-lib.sh; do
     assert "skill mentions $script" bash -c "grep -q '$script' '$f'"
+  done
+
+  # The deep-links section must document the routes and the --osc8 flag.
+  local token
+  for token in 'fsnotes://find' 'fsnotes://new' '--osc8'; do
+    assert "skill mentions $token" bash -c "grep -qF -- '$token' '$f'"
   done
 
   # No real-world local notebook names may be hardcoded anywhere in the

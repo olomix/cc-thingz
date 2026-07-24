@@ -74,9 +74,31 @@ never hard-deletes, mirroring FSNotes's own delete. Relative paths resolve
 against the notes dir; absolute paths must resolve inside it (anything
 outside the store is refused).
 
+## Deep links
+
+FSNotes registers the `fsnotes://` URL scheme, so a reply can carry a
+clickable link straight into the app. Build every link with
+`scripts/fsnotes-link.sh` — never hand-encode a URL. The four routes:
+
+- **Referencing an existing note?** emit a `find` link — it opens the note
+  by title (falling back to the search field on no match):
+  `fsnotes-link.sh find "<title>"` → `fsnotes://find?id=<title>`.
+- **Suggesting a note that doesn't exist yet?** emit a `new` link (or `open`,
+  which opens-or-creates): `fsnotes-link.sh new "<title>" [--txt "<body>"]
+  [--folder "<notebook>"]` → `fsnotes://new/?title=…`.
+- **Pointing at a tag?** emit a `tag` link — selects it in the sidebar:
+  `fsnotes-link.sh tag "<tag>"` → `fsnotes://open/?tag=<tag>`.
+
+The default output is a markdown link `[<title>](<url>)` — use it in normal
+replies. The `--osc8` flag instead wraps the visible text in OSC 8 escape
+sequences, for terminals that hyperlink arbitrary schemes (e.g. kitty);
+reach for it only when a raw terminal hyperlink is wanted.
+
 ## Scripts reference
 
 - `scripts/fsnotes-search.sh <mode> <query> [notebook]` — search.
 - `scripts/fsnotes-newpath.sh <title> [notebook]` — safe path for a new note.
 - `scripts/fsnotes-trash.sh <note-path>` — move a note to `Trash/`.
+- `scripts/fsnotes-link.sh [--osc8] <route> <args…>` — build an
+  `fsnotes://` deep link (`find`/`open`/`tag`/`new`).
 - `scripts/fsnotes-lib.sh` — sourced by the others; not called directly.
