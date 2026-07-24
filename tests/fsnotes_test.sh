@@ -190,6 +190,16 @@ test_urlencode() {
     "$(urlencode 'Заметка')"
   # Empty input yields empty output.
   assert_eq "urlencode handles empty input" "" "$(urlencode '')"
+
+  # Bash 3.2 (macOS's bundled /bin/bash) regression: a high byte formatted
+  # directly renders as %FFFFFFFFFFFFFFD0. Re-run the UTF-8 encode under
+  # /bin/bash so the masking stays correct on the oldest supported shell.
+  if [[ -x /bin/bash ]]; then
+    assert_eq "urlencode UTF-8 correct under /bin/bash" \
+      "%D0%97%D0%B0%D0%BC%D0%B5%D1%82%D0%BA%D0%B0" \
+      "$(/bin/bash -c \
+        "source '$PLUGIN_DIR/scripts/fsnotes-lib.sh'; urlencode 'Заметка'")"
+  fi
 }
 
 # --- Tests: fsnotes-link.sh --------------------------------------------------
@@ -232,6 +242,17 @@ test_link() {
     "[Tom & Jerry](fsnotes://find?id=Tom%20%26%20Jerry)" \
     "$("$LINK" find 'Tom & Jerry')"
 
+  # A multi-byte UTF-8 title must produce a link, not be rejected as invisible.
+  # The visibility check must be locale-independent: under LC_ALL=C the
+  # [:graph:] class matches only ASCII, so this guards against a regression
+  # where a Cyrillic title errors out with "no visible characters".
+  assert_eq "link utf8 title markdown" \
+    "[Заметка](fsnotes://find?id=%D0%97%D0%B0%D0%BC%D0%B5%D1%82%D0%BA%D0%B0)" \
+    "$("$LINK" find 'Заметка')"
+  assert_eq "link utf8 title under C locale" \
+    "[Заметка](fsnotes://find?id=%D0%97%D0%B0%D0%BC%D0%B5%D1%82%D0%BA%D0%B0)" \
+    "$(LC_ALL=C "$LINK" find 'Заметка')"
+
   # --osc8: exact escape framing. ST is ESC "\"; the payload is ASCII because
   # the URL is fully percent-encoded.
   local esc expected
@@ -252,10 +273,90 @@ test_link() {
     "[Draft \\[WIP](fsnotes://find?id=Draft%20%5BWIP)" \
     "$("$LINK" find 'Draft [WIP')"
 
+  # Control characters must not reach the display text: a raw ESC/BEL would
+  # break the OSC 8 framing or inject terminal controls; the URL side keeps
+  # them percent-encoded. Markdown text drops them entirely.
+  local ctrl=$'Ev\033il\007'
+  assert_eq "link strips control chars from markdown text" \
+    "[Evil](fsnotes://find?id=Ev%1Bil%07)" \
+    "$("$LINK" find "$ctrl")"
+  expected="${esc}]8;;fsnotes://find?id=Ev%1Bil%07${esc}\\Evil${esc}]8;;${esc}\\"
+  assert_eq "link strips control chars from osc8 text" "$expected" \
+    "$("$LINK" --osc8 find "$ctrl")"
+  # C1 control bytes (U+0080-U+009F, e.g. OSC 0x9D / ST 0x9C) must not survive
+  # into the display text, even under LC_ALL=C where tr -d '[:cntrl:]' treats
+  # only ASCII bytes as controls. A crafted title with raw C1 bytes could
+  # otherwise close the OSC 8 hyperlink and inject a terminal sequence. The
+  # adjacent Cyrillic proves the fix does not corrupt UTF-8 continuation bytes,
+  # which also fall in 0x80-0xBF. The URL side keeps the bytes percent-encoded.
+  local c1raw
+  c1raw=$'A\x9dЗ\x9c'
+  expected="${esc}]8;;fsnotes://find?id=A%9D%D0%97%9C${esc}\\AЗ${esc}]8;;${esc}\\"
+  assert_eq "link strips raw C1 controls from osc8 text under C locale" \
+    "$expected" "$(LC_ALL=C "$LINK" --osc8 find "$c1raw")"
+  # Well-formed UTF-8 C1 (0xC2 0x9D = U+009D OSC) must be stripped too.
+  local c1enc
+  c1enc=$'A\xc2\x9dB'
+  expected="${esc}]8;;fsnotes://find?id=A%C2%9DB${esc}\\AB${esc}]8;;${esc}\\"
+  assert_eq "link strips encoded C1 controls from osc8 text under C locale" \
+    "$expected" "$(LC_ALL=C "$LINK" --osc8 find "$c1enc")"
+  # C/POSIX-only host with no UTF-8 locale installed: point LC_ALL at a
+  # non-existent UTF-8 locale (what the old locale-detection fallback did) and
+  # confirm C1 stripping still happens. tr/sed must classify bytes, not rely on
+  # a working UTF-8 locale, so 0xC2 0x9D is removed instead of leaking into the
+  # OSC 8 payload.
+  assert_eq "link strips encoded C1 controls with no UTF-8 locale" \
+    "$expected" \
+    "$(env -u LANG -u LC_CTYPE LC_ALL=bogus.UTF-8 "$LINK" --osc8 find "$c1enc" \
+      2>/dev/null)"
+  # A newline in the title must not split the markdown link across lines.
+  assert_eq "link strips newline from markdown text" \
+    "[ab](fsnotes://find?id=a%0Ab)" \
+    "$("$LINK" find $'a\nb')"
+
   # Error cases (all exit non-zero, message on stderr).
   assert "link no args errors" bash -c "! '$LINK' 2>/dev/null"
   assert "link unknown route errors" bash -c "! '$LINK' bogus x 2>/dev/null"
   assert "link empty title errors" bash -c "! '$LINK' find '' 2>/dev/null"
+  # A control-only or whitespace-only title strips to no visible glyph and must
+  # error, not emit an invisible link ([](url) or blank OSC 8 text).
+  assert "link control-only title errors" bash -c \
+    "! '$LINK' find \$'\\001\\002' 2>/dev/null"
+  assert "link whitespace-only title errors" bash -c \
+    "! '$LINK' find '   ' 2>/dev/null"
+  # A title of only Unicode whitespace (U+2003 EM SPACE) is not ASCII space, so
+  # a C-locale [:space:] test would let it through as an invisible link. The
+  # visibility check must reject it even under LC_ALL=C.
+  assert "link unicode-whitespace-only title errors" bash -c \
+    "! LC_ALL=C '$LINK' find \$'\\xe2\\x80\\x83' 2>/dev/null"
+  # Same rejection on a C/POSIX-only host with no UTF-8 locale installed: the
+  # emptiness check strips Unicode whitespace byte-for-byte, so it must not
+  # depend on [:space:] being Unicode-aware under some installed locale.
+  assert "link unicode-whitespace-only title errors with no UTF-8 locale" bash -c \
+    "! env -u LANG -u LC_CTYPE LC_ALL=bogus.UTF-8 '$LINK' find \$'\\xe2\\x80\\x83' 2>/dev/null"
+  # A title of only default-ignorable characters (zero-width / format / BOM) is
+  # not whitespace, so a whitespace-only check would let it through as an
+  # invisible link. U+200B ZERO WIDTH SPACE (E2 80 8B) and U+FEFF (EF BB BF)
+  # must be rejected, including under a missing UTF-8 locale.
+  assert "link zero-width-space-only title errors" bash -c \
+    "! LC_ALL=C '$LINK' find \$'\\xe2\\x80\\x8b' 2>/dev/null"
+  assert "link bom-only title errors" bash -c \
+    "! LC_ALL=C '$LINK' find \$'\\xef\\xbb\\xbf' 2>/dev/null"
+  # Mix of zero-width chars from different ranges (ZWJ, word joiner, LRM, a
+  # variation selector) with no visible glyph must still error.
+  assert "link default-ignorable-only title errors" bash -c \
+    "! LC_ALL=C '$LINK' find \$'\\xe2\\x80\\x8d\\xe2\\x81\\xa0\\xe2\\x80\\x8e\\xef\\xb8\\x8f' 2>/dev/null"
+  assert "link zero-width-only title errors with no UTF-8 locale" bash -c \
+    "! env -u LANG -u LC_CTYPE LC_ALL=bogus.UTF-8 '$LINK' find \$'\\xef\\xbb\\xbf' 2>/dev/null"
+  # A zero-width character between visible glyphs is legitimate: it must NOT be
+  # rejected, and the glyphs (plus the raw ZWSP) survive into the link text.
+  local zwsp_title zwsp_expected
+  zwsp_title=$'a\xe2\x80\x8bb'
+  zwsp_expected="[${zwsp_title}](fsnotes://find?id=a%E2%80%8Bb)"
+  assert_eq "link keeps zero-width char inside visible title" \
+    "$zwsp_expected" "$(LC_ALL=C "$LINK" find "$zwsp_title")"
+  assert "link control-only osc8 title errors" bash -c \
+    "! '$LINK' --osc8 find \$'\\001' 2>/dev/null"
   assert "link reserved folder errors" bash -c \
     "! '$LINK' new Note --folder Trash 2>/dev/null"
   assert "link unknown flag errors" bash -c \

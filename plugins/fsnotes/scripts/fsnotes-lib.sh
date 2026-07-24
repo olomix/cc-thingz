@@ -122,13 +122,20 @@ sanitize_title() {
 # encoded per byte (e.g. "З" -> "%D0%97"), matching how the FSNotes URL routes
 # expect query values. No trailing newline: callers assemble URLs inline.
 urlencode() {
-  local string="$1" out="" i c
+  local string="$1" out="" i c n
   local LC_ALL=C
   for ((i = 0; i < ${#string}; i++)); do
     c="${string:i:1}"
     case "$c" in
       [A-Za-z0-9.~_-]) out+="$c" ;;
-      *) printf -v c '%%%02X' "'$c"; out+="$c" ;;
+      *)
+        # macOS's bundled Bash 3.2 treats a high byte (>= 0x80) as a signed
+        # char, so "'$c" yields a negative value that '%02X' renders as
+        # %FFFFFFFFFFFFFFD0 instead of %D0. Mask to a single byte first.
+        printf -v n '%d' "'$c"
+        printf -v c '%%%02X' "$((n & 0xFF))"
+        out+="$c"
+        ;;
     esac
   done
   printf '%s' "$out"
