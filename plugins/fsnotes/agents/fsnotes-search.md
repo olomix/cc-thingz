@@ -47,3 +47,16 @@ Return a compact hit list: each line is `relative/path:line:text` (or just
 `relative/path` for filename-only title matches), exactly as the script
 prints it. If there are no hits, say so plainly. Do not read the matched
 files or include their full contents unless explicitly asked.
+
+Then, after the hit list, append one clickable link per distinct matched note
+so the caller can open it in FSNotes. Build each link with the link script —
+never hand-encode a URL:
+
+```
+"${CLAUDE_PLUGIN_ROOT}/scripts/fsnotes-link.sh" find <title>
+```
+
+The `<title>` is the hit's filename with the `.markdown` extension removed and
+without any leading folder path (e.g. `Work/Project plan.markdown` → `Project
+plan`). This prints a markdown `[Title](fsnotes://find?id=…)` link. Keep the
+hit-list format itself unchanged; the links are an addition below it.

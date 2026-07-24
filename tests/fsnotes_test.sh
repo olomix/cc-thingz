@@ -524,6 +524,13 @@ test_search_agent() {
   assert "search agent references the search script" bash -c \
     "grep -q 'fsnotes-search.sh' '$f'"
 
+  # Output guidance must point at the link builder and the find route so hits
+  # come back as clickable fsnotes://find links.
+  assert "search agent references the link script" bash -c \
+    "grep -q 'fsnotes-link.sh' '$f'"
+  assert "search agent mentions fsnotes://find" bash -c \
+    "grep -qF -- 'fsnotes://find' '$f'"
+
   local fm mode
   fm="$(frontmatter "$f")"
   for mode in text title tag folder; do

@@ -159,15 +159,15 @@ unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
 
 ### Task 4: Link-enabled search agent output
 
-- [ ] add doc-shaped tests: `agents/fsnotes-search.md` mentions
+- [x] add doc-shaped tests: `agents/fsnotes-search.md` mentions
       `fsnotes-link.sh` and `fsnotes://find`
-- [ ] update `plugins/fsnotes/agents/fsnotes-search.md` "What to return":
+- [x] update `plugins/fsnotes/agents/fsnotes-search.md` "What to return":
       after the hit list, append one markdown `find` link per distinct
       matched note, built with
       `"${CLAUDE_PLUGIN_ROOT}/scripts/fsnotes-link.sh" find <title>` where
       the title is the hit's filename without the `.markdown` extension;
       keep the hit-list format itself unchanged
-- [ ] run `tests/fsnotes_test.sh` — must pass
+- [x] run `tests/fsnotes_test.sh` — must pass
 
 ### Task 5: Verify acceptance criteria
 
