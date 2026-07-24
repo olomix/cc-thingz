@@ -183,8 +183,8 @@ unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
 
 ### Task 6: Update documentation
 
-- [ ] update `README.md` if it describes the fsnotes plugin's capabilities
-- [ ] bump the plugin version in
+- [x] update `README.md` if it describes the fsnotes plugin's capabilities
+- [x] bump the plugin version in
       `plugins/fsnotes/.claude-plugin/plugin.json` if the repo convention is
       to version plugin changes (check dotfiles plugin history)
 

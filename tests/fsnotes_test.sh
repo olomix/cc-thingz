@@ -115,7 +115,7 @@ test_plugin_manifest() {
   assert "plugin.json exists" test -f "$f"
   assert "plugin.json is valid JSON" valid_json "$f"
   assert_eq "plugin name" "fsnotes" "$(jq -r '.name' "$f")"
-  assert_eq "plugin version" "0.1.0" "$(jq -r '.version' "$f")"
+  assert_eq "plugin version" "0.1.1" "$(jq -r '.version' "$f")"
   assert "plugin has description" json_has_key "$f" '.description'
   assert "plugin has license" json_has_key "$f" '.license'
   assert "plugin has homepage" json_has_key "$f" '.homepage'

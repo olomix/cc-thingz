@@ -33,10 +33,16 @@ The actual logic lives in small, deterministic shell scripts under
   for a new note (never overwrites).
 - `fsnotes-trash.sh <note-path>` — move a note into `Trash/` (never
   hard-deletes).
+- `fsnotes-link.sh [--osc8] <route> <args…>` — build a clickable `fsnotes://`
+  deep link into the FSNotes app (routes: `find`, `open`, `tag`, `new`).
+  Default output is a markdown link; `--osc8` emits OSC 8 escapes for
+  terminals that hyperlink arbitrary schemes.
 - `fsnotes-lib.sh` — shared helpers, sourced by the others.
 
 A `fsnotes-search` subagent and the `fsnotes` skill wire these together so
-Claude picks the right operation and returns compact results.
+Claude picks the right operation and returns compact results. When Claude
+mentions a note in a reply, it emits a `fsnotes://` deep link so you can jump
+straight to it in the FSNotes app.
 
 ### Install
 

@@ -1,7 +1,7 @@
 {
   "name": "fsnotes",
   "description": "Search, create, edit, and delete notes managed by the FSNotes macOS app via natural requests.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Oleg Lomaka"
   },
