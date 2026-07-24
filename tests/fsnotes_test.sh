@@ -192,6 +192,64 @@ test_urlencode() {
   assert_eq "urlencode handles empty input" "" "$(urlencode '')"
 }
 
+# --- Tests: fsnotes-link.sh --------------------------------------------------
+
+LINK="$PLUGIN_DIR/scripts/fsnotes-link.sh"
+
+test_link() {
+  # find: markdown link, title encoded in the URL but raw in the link text.
+  assert_eq "link find markdown" \
+    "[Grocery list](fsnotes://find?id=Grocery%20list)" \
+    "$("$LINK" find 'Grocery list')"
+
+  # open: open-or-create by title.
+  assert_eq "link open markdown" \
+    "[My note](fsnotes://open/?title=My%20note)" \
+    "$("$LINK" open 'My note')"
+
+  # open with --txt appends the text query.
+  assert_eq "link open with txt" \
+    "[My note](fsnotes://open/?title=My%20note&txt=Hello%20there)" \
+    "$("$LINK" open 'My note' --txt 'Hello there')"
+
+  # tag: select a tag in the sidebar.
+  assert_eq "link tag markdown" \
+    "[work](fsnotes://open/?tag=work)" \
+    "$("$LINK" tag work)"
+
+  # new: create a note.
+  assert_eq "link new markdown" \
+    "[Fresh idea](fsnotes://new/?title=Fresh%20idea)" \
+    "$("$LINK" new 'Fresh idea')"
+
+  # new with --txt and --folder.
+  assert_eq "link new with txt and folder" \
+    "[Fresh idea](fsnotes://new/?title=Fresh%20idea&txt=Body%20text&folder=Work)" \
+    "$("$LINK" new 'Fresh idea' --txt 'Body text' --folder Work)"
+
+  # A space and an ampersand encode inside the URL but stay raw in link text.
+  assert_eq "link encodes ampersand in url, raw in text" \
+    "[Tom & Jerry](fsnotes://find?id=Tom%20%26%20Jerry)" \
+    "$("$LINK" find 'Tom & Jerry')"
+
+  # --osc8: exact escape framing. ST is ESC "\"; the payload is ASCII because
+  # the URL is fully percent-encoded.
+  local esc expected
+  esc=$'\033'
+  expected="${esc}]8;;fsnotes://find?id=Grocery%20list${esc}\\Grocery list${esc}]8;;${esc}\\"
+  assert_eq "link osc8 framing" "$expected" \
+    "$("$LINK" --osc8 find 'Grocery list')"
+
+  # Error cases (all exit non-zero, message on stderr).
+  assert "link no args errors" bash -c "! '$LINK' 2>/dev/null"
+  assert "link unknown route errors" bash -c "! '$LINK' bogus x 2>/dev/null"
+  assert "link empty title errors" bash -c "! '$LINK' find '' 2>/dev/null"
+  assert "link reserved folder errors" bash -c \
+    "! '$LINK' new Note --folder Trash 2>/dev/null"
+  assert "link unknown flag errors" bash -c \
+    "! '$LINK' find Note --bogus 2>/dev/null"
+}
+
 # --- Tests: fsnotes-search.sh ------------------------------------------------
 
 SEARCH="$PLUGIN_DIR/scripts/fsnotes-search.sh"
@@ -517,6 +575,7 @@ main() {
   test_resolve_notes_dir
   test_sanitize_title
   test_urlencode
+  test_link
   test_search
   test_search_grep_fallback
   test_newpath

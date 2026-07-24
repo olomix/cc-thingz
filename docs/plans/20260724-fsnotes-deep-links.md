@@ -126,19 +126,19 @@ title/tag). With `--osc8`: `\e]8;;<url>\e\<title>\e]8;;\e\` followed by a
 newline. `--folder` goes through `guard_notebook`. Empty/missing title, an
 unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
 
-- [ ] add tests: markdown output for each route (`find`, `open`,
+- [x] add tests: markdown output for each route (`find`, `open`,
       `open --txt`, `tag`, `new`, `new --txt --folder`), space and `&` in a
       title encode correctly inside the URL but stay raw in the link text
-- [ ] add tests for `--osc8` output (assert exact escape framing with
+- [x] add tests for `--osc8` output (assert exact escape framing with
       `printf`-built expected string)
-- [ ] add error-case tests: no args, unknown route, empty title, reserved
+- [x] add error-case tests: no args, unknown route, empty title, reserved
       folder (`new … --folder Trash` fails via `guard_notebook`), unknown
       flag
-- [ ] implement `plugins/fsnotes/scripts/fsnotes-link.sh` (executable,
+- [x] implement `plugins/fsnotes/scripts/fsnotes-link.sh` (executable,
       sources `fsnotes-lib.sh`; no notes-dir resolution needed — links are
       title-based)
-- [ ] run `tests/fsnotes_test.sh` — must pass
-- [ ] run `shellcheck` on `fsnotes-link.sh` — clean
+- [x] run `tests/fsnotes_test.sh` — must pass
+- [x] run `shellcheck` on `fsnotes-link.sh` — clean
 
 ### Task 3: Teach SKILL.md the deep links
 
