@@ -171,14 +171,14 @@ unknown route, or unknown flags → `fsnotes:`-prefixed stderr message, exit 1.
 
 ### Task 5: Verify acceptance criteria
 
-- [ ] verify all requirements from Overview are implemented (all four
+- [x] verify all requirements from Overview are implemented (all four
       routes, markdown default, `--osc8`, SKILL.md guidance, agent links)
-- [ ] verify edge cases are handled (UTF-8 titles, `&`/`?` in titles,
+- [x] verify edge cases are handled (UTF-8 titles, `&`/`?` in titles,
       reserved folders, empty input)
-- [ ] run full test suite: `tests/fsnotes_test.sh` and the other suites in
+- [x] run full test suite: `tests/fsnotes_test.sh` and the other suites in
       `tests/` — all pass
-- [ ] run `shellcheck` on all touched shell files — clean
-- [ ] grep the diff for personal data (usernames, real note titles, private
+- [x] run `shellcheck` on all touched shell files — clean
+- [x] grep the diff for personal data (usernames, real note titles, private
       paths) — none introduced
 
 ### Task 6: Update documentation
