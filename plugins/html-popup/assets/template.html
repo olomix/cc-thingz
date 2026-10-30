@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<!-- The window title comes from <title> unless --title is given. -->
+<title>Title</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #d2d2d7; --accent: #0a84ff; --accent-text: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e; --panel: #2c2c2e; --text: #f5f5f7; --muted: #98989d;
+      --line: #3a3a3c; --accent: #0a84ff; --accent-text: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased; cursor: default;
+  }
+  /* 44px top padding keeps content clear of the traffic-light buttons. */
+  main {
+    display: flex; flex-direction: column; height: 100%;
+    padding: 44px 32px 20px;
+  }
+  header h1 {
+    margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  header .sub { color: var(--muted); margin-top: 4px; }
+  .content {
+    flex: 1; display: flex; gap: 16px; margin-top: 20px; min-height: 0;
+  }
+  .body { flex: 1; overflow: auto; }
+  .panel { background: var(--panel); border-radius: 12px; padding: 14px 16px; }
+  #details { width: 260px; overflow: auto; }
+  #details[hidden] { display: none; }
+  #details .k { color: var(--muted); font-size: 12px; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  button {
+    font: inherit; border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 14px; background: var(--panel); color: var(--text);
+  }
+  button.primary {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  footer {
+    display: flex; justify-content: space-between; margin-top: 14px;
+    color: var(--muted); font-size: 11.5px;
+  }
+  kbd {
+    font: inherit; background: var(--panel); border-radius: 4px;
+    padding: 1px 5px; color: var(--text);
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">Title</h1>
+    <div class="sub">One line that says what the user should look at or do.</div>
+  </header>
+
+  <div class="content">
+    <!-- Content slot: replace with the report, chart or form. -->
+    <section class="body panel" id="body">
+      <p>Content goes here.</p>
+    </section>
+    <!-- Filled by messages from the agent (live mode). -->
+    <aside class="panel" id="details" hidden></aside>
+  </div>
+
+  <div class="actions">
+    <button id="send">Details</button>
+    <button id="answer" class="primary">Done</button>
+  </div>
+
+  <footer>
+    <span id="source"></span>
+    <span><kbd>Return</kbd> done · <kbd>Esc</kbd> close</span>
+  </footer>
+</main>
+<script>
+  // htmlPopup is injected by the viewer; htmlPopup.data is the --data JSON.
+  const data = htmlPopup.data || {};
+  if (data.title) document.getElementById("title").textContent = data.title;
+  if (data.source) document.getElementById("source").textContent = data.source;
+
+  // ask mode: answer() returns the value to the agent and closes the window.
+  const done = () => htmlPopup.answer({ ok: true });
+  document.getElementById("answer").addEventListener("click", done);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.target.closest("input, textarea, select, button")) done();
+  });
+
+  // live mode: send() emits an event to the agent; the window stays open.
+  document.getElementById("send").addEventListener("click", () =>
+    htmlPopup.send({ action: "details" }));
+
+  // live mode: the agent replies with {"details": {label: value, ...}}.
+  htmlPopup.onMessage((msg) => {
+    if (!msg || typeof msg.details !== "object") return;
+    const panel = document.getElementById("details");
+    panel.replaceChildren(...Object.entries(msg.details).map(([k, v]) => {
+      const row = document.createElement("div");
+      row.innerHTML = '<div class="k"></div><div class="v"></div>';
+      row.children[0].textContent = k;
+      row.children[1].textContent = String(v);
+      return row;
+    }));
+    panel.hidden = false;
+  });
+</script>
+</body>
+</html>

@@ -972,6 +972,51 @@ test_wrapper_live_races() {
   assert_eq "close on a gone session exits 0" "0" "$RC"
 }
 
+# --- Tests: starter template -------------------------------------------------
+
+TEMPLATE="$PLUGIN_DIR/assets/template.html"
+
+test_template_static() {
+  assert "template exists" test -f "$TEMPLATE"
+  assert "template references no remote resources" \
+    not_contains "http://" "$(cat "$TEMPLATE")"
+  assert "template references no https resources" \
+    not_contains "https://" "$(cat "$TEMPLATE")"
+  assert "template follows light/dark appearance" \
+    contains "prefers-color-scheme: dark" "$(cat "$TEMPLATE")"
+  assert "template uses the bridge answer hook" \
+    contains "htmlPopup.answer(" "$(cat "$TEMPLATE")"
+  assert "template uses the bridge send hook" \
+    contains "htmlPopup.send(" "$(cat "$TEMPLATE")"
+  assert "template uses the bridge onMessage hook" \
+    contains "htmlPopup.onMessage(" "$(cat "$TEMPLATE")"
+}
+
+test_template_headless() {
+  skip_unless_gui "template headless run" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local session events="" tries=10
+
+  wrap template-answer.js ask "$TEMPLATE" --timeout 20
+  assert_eq "template Done button answers" "0" "$RC"
+  assert_eq "template answer JSON" '{"ok":true}' "$OUT"
+
+  wrap template-details.js live start "$TEMPLATE" --timeout 30
+  assert_eq "template live start exits 0" "0" "$RC"
+  session="$OUT"
+  wrap - live send "$session" '{"details":{"Total":"43,929 GWh"}}'
+  assert_eq "template live send exits 0" "0" "$RC"
+  while ((tries-- > 0)) && not_contains '"type":"message"' "$events"; do
+    wrap - live wait "$session" --wait 5
+    events+="$OUT"$'\n'
+  done
+  assert "template renders agent details in the panel" \
+    contains '"data":{"hidden":false,"text":"Total43,929 GWh"}' "$events"
+  wrap - live close "$session"
+  assert_eq "template window closes" "0" "$RC"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -1001,6 +1046,8 @@ main() {
   test_wrapper_ask
   test_wrapper_live
   test_wrapper_live_races
+  test_template_static
+  test_template_headless
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }

@@ -421,14 +421,14 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `plugins/html-popup/assets/template.html`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] native-looking template: system font, light/dark via
+- [x] native-looking template: system font, light/dark via
       `prefers-color-scheme`, 44px top padding for traffic lights, header,
       content slot, footer with keyboard hints, no external resources
-- [ ] minimal commented hooks: a button calling `answer`, one calling
+- [x] minimal commented hooks: a button calling `answer`, one calling
       `send`, an `onMessage` handler that fills a details panel
-- [ ] write tests: no `http://`/`https://` resource references; headless run
+- [x] write tests: no `http://`/`https://` resource references; headless run
       with a test script clicking the answer button returns the expected JSON
-- [ ] run tests — must pass before task 8
+- [x] run tests — must pass before task 8
 
 ### Task 8: Reference example — 2025 US solar report
 
