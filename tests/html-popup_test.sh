@@ -354,6 +354,14 @@ test_build_cache() {
   assert_eq "rebuilt bundle root holds only Contents" "Contents" \
     "$(dir_entries "$OUT")"
   assert_eq "partial bundle compiles again" "5" "$(count_lines "$calls")"
+
+  rm "$OUT/Contents/Info.plist"
+  run_capture "$wrapper" build
+  assert_eq "bundle without Info.plist rebuilds" "0" "$RC"
+  assert_eq "bundle without Info.plist keeps its path" "$third" "$OUT"
+  assert "rebuilt bundle has Info.plist" test -f "$OUT/Contents/Info.plist"
+  assert_eq "bundle without Info.plist compiles again" "6" \
+    "$(count_lines "$calls")"
   unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_CALLS
 }
 
@@ -394,35 +402,76 @@ test_build_prune() {
   assert "rebuilt bundle is executable" test -x "$(bundle_exec "$OUT")"
 }
 
+# run_parallel_builds <cache> <n> : run n builds at once; print how many
+# failed, then the distinct paths they printed.
+run_parallel_builds() {
+  local wrapper="$PLUGIN_DIR/scripts/html-popup.sh" pids=() pid i fails=0
+  for ((i = 0; i < $2; i++)); do
+    "$wrapper" build >"$1/out$i" 2>/dev/null &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" || fails=$((fails + 1))
+  done
+  printf '%s\n' "$fails"
+  cat "$1"/out* | sort -u
+  rm -f "$1"/out*
+}
+
+# The install races are a few microseconds wide, so run several rounds of
+# eight builds that finish together.
 test_build_concurrent() {
   skip_unless_macos "concurrent builds" || return 0
-  local cache wrapper out1 out2 rc1=0 rc2=0 pid1 pid2 entries
+  local cache round result path entries
   new_tmpdir cache
-  wrapper="$PLUGIN_DIR/scripts/html-popup.sh"
-  export CLAUDE_PLUGIN_DATA="$cache/bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
-  export FAKE_SWIFTC_DELAY=1 FAKE_SWIFTC_CALLS="$cache/calls"
+  export HTML_POPUP_SWIFTC="$FAKE_SWIFTC" FAKE_SWIFTC_DELAY=0.3
 
-  "$wrapper" build >"$cache/out1" 2>/dev/null &
-  pid1=$!
-  "$wrapper" build >"$cache/out2" 2>/dev/null &
-  pid2=$!
-  wait "$pid1" || rc1=$?
-  wait "$pid2" || rc2=$?
-  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_DELAY FAKE_SWIFTC_CALLS
+  for round in 1 2 3 4; do
+    export CLAUDE_PLUGIN_DATA="$cache/bin$round"
+    result="$(run_parallel_builds "$cache" 8)"
+    assert_eq "round $round: all concurrent builds exit 0" "0" \
+      "$(head -n 1 <<<"$result")"
+    path="$(tail -n +2 <<<"$result")"
+    assert_eq "round $round: concurrent builds print one path" "1" \
+      "$(grep -c . <<<"$path")"
+    entries="$(dir_entries "$CLAUDE_PLUGIN_DATA")"
+    assert_eq "round $round: concurrent builds leave exactly one bundle" \
+      "$(basename "$path")" "$entries"
+    assert_eq "round $round: the bundle root holds only Contents" \
+      "Contents" "$(dir_entries "$path")"
+    assert "round $round: the bundle executable runs" \
+      test -x "$(bundle_exec "$path")"
+  done
 
-  assert_eq "both builds compiled at the same time" "2" \
-    "$(count_lines "$cache/calls")"
-  out1="$(cat "$cache/out1")"
-  out2="$(cat "$cache/out2")"
-  assert_eq "first concurrent build exits 0" "0" "$rc1"
-  assert_eq "second concurrent build exits 0" "0" "$rc2"
-  assert_eq "concurrent builds print the same path" "$out1" "$out2"
-  entries="$(dir_entries "$cache/bin")"
-  assert_eq "concurrent builds leave exactly one bundle" \
-    "$(basename "$out1")" "$entries"
-  assert_eq "the bundle root holds only Contents" "Contents" \
-    "$(dir_entries "$out1")"
-  assert "the bundle executable runs" test -x "$(bundle_exec "$out1")"
+  # Concurrent builds repair a damaged bundle once and keep the new one.
+  # A 0.1 s compile spreads the installs over the repair, where the race was.
+  export FAKE_SWIFTC_DELAY=0.1
+  for round in 1 2 3 4 5; do
+    rm "$(bundle_exec "$path")"
+    result="$(run_parallel_builds "$cache" 8)"
+    assert_eq "repair $round: concurrent repairs exit 0" "0" \
+      "$(head -n 1 <<<"$result")"
+    assert_eq "repair $round: concurrent repairs print the same path" \
+      "$path" "$(tail -n +2 <<<"$result")"
+    assert_eq "repair $round: concurrent repairs leave exactly one bundle" \
+      "$(basename "$path")" "$(dir_entries "$CLAUDE_PLUGIN_DATA")"
+    assert_eq "repair $round: the repaired bundle root holds only Contents" \
+      "Contents" "$(dir_entries "$path")"
+    assert "repair $round: the repaired bundle executable runs" \
+      test -x "$(bundle_exec "$path")"
+  done
+
+  # A lock left by a dead builder delays the repair but does not block it.
+  rm "$(bundle_exec "$path")"
+  mkdir "$path.lock"
+  touch -t 202001010000 "$path.lock"
+  result="$(run_parallel_builds "$cache" 2)"
+  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_DELAY
+  assert_eq "builds past a stale lock exit 0" "0" "$(head -n 1 <<<"$result")"
+  assert_eq "builds past a stale lock repair the bundle and drop the lock" \
+    "$(basename "$path")" "$(dir_entries "$cache/bin4")"
+  assert "the bundle repaired past a stale lock runs" \
+    test -x "$(bundle_exec "$path")"
 }
 
 # --- Tests: check and build errors --------------------------------------------

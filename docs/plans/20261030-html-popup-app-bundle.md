@@ -236,11 +236,15 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   `{ declare -f build_viewer; cat swift Info.plist AppIcon.icns; } |
   shasum -a 256`: the `build_viewer` body is part of the key, so a change
   to how the bundle is assembled also rebuilds.
-- Assemble into `<bundle>.tmp.$$/`, then `mv "$tmp" "$bundle"`. BSD `mv`
-  has no `-T`: if another builder finished first, the temp dir lands
-  inside the bundle. After the `mv`, remove `"$bundle/${tmp##*/}"` if it
-  exists. The bundle root must contain only `Contents`. A bundle that lost
-  its executable is removed before the `mv`, so it is rebuilt.
+- Compile and assemble into `<bundle>.tmp.$$/` without a lock. Install
+  under the `mkdir` lock `<bundle>.lock`: if the bundle passes `bundle_ok`
+  (executable and `Info.plist` present), drop our temp dir and use it;
+  otherwise rename a damaged bundle to `<bundle>.damaged.$$`, `rm -rf` it
+  and `mv "$tmp" "$bundle"`. Since installs are serialized, no temp dir
+  lands inside a bundle (BSD `mv` has no `-T`) and a bundle passing
+  `bundle_ok` is never deleted. Waiters poll every 0.1 s; a lock older than
+  5 s (by its mtime) belongs to a dead build and is removed. The bundle
+  root must contain only `Contents`.
 - `build` prints the bundle path. Touch the bundle on a cache hit.
 - Prune `html-popup-viewer-*.app` and `*.app.tmp.*` unused for over a day
   with `rm -rf`, and legacy loose `html-popup-viewer-<hash>` binaries.

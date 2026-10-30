@@ -139,10 +139,14 @@ viewer_path() {
   printf '%s/%s-%s.app' "$CACHE_DIR" "$VIEWER_NAME" "${hash:0:12}"
 }
 
+bundle_ok() {
+  [[ -x "$1/Contents/MacOS/$VIEWER_NAME" && -f "$1/Contents/Info.plist" ]]
+}
+
 # build_viewer : build the viewer app bundle unless cached; print its path.
 build_viewer() {
   (($# == 0)) || die "unexpected argument: $1"
-  local failed=0 bundle tmp exe
+  local failed=0 bundle tmp exe lock damaged age i
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
@@ -154,7 +158,7 @@ build_viewer() {
   bundle="$(viewer_path)"
   exe="Contents/MacOS/$VIEWER_NAME"
   # Touch on use: pruning below spares bundles used within the last day.
-  if [[ -x "$bundle/$exe" ]] && touch "$bundle"; then
+  if bundle_ok "$bundle" && touch "$bundle"; then
     printf '%s\n' "$bundle"
     return 0
   fi
@@ -169,13 +173,24 @@ build_viewer() {
   fi
   cp "$VIEWER_PLIST" "$tmp/Contents/Info.plist"
   cp "$VIEWER_ICON" "$tmp/Contents/Resources/AppIcon.icns"
-  # A bundle without its executable was damaged; mv would not replace it.
-  [[ -x "$bundle/$exe" ]] || rm -rf "$bundle"
-  # If another build installed the bundle first, mv fails (macOS refuses a
-  # non-empty target) or, lacking -T, moves ours inside it. Keep theirs.
-  mv "$tmp" "$bundle" 2>/dev/null || true
-  rm -rf "$tmp" "${bundle:?}/${tmp##*/}"
-  [[ -x "$bundle/$exe" ]] || die "failed to install the viewer bundle: $bundle"
+  # Install under a lock, so no build moves its temp dir into a bundle that
+  # another build is deleting.
+  lock="$bundle.lock"
+  damaged="$bundle.damaged.$$"
+  for ((i = 0; i < 100; i++)); do
+    mkdir "$lock" 2>/dev/null && break
+    # A lock held over 5 s belongs to a dead build. Judge by the lock's age,
+    # not our wait, so a lock just retaken by another waiter is kept.
+    age=$(($(date +%s) - $(stat -f %m "$lock" 2>/dev/null || date +%s)))
+    ((age <= 5)) || rmdir "$lock" 2>/dev/null || true
+    sleep 0.1
+  done
+  if ! bundle_ok "$bundle"; then
+    mv "$bundle" "$damaged" 2>/dev/null || true
+    [[ -e "$bundle" ]] || mv "$tmp" "$bundle" || true
+  fi
+  rm -rf "$tmp" "$damaged" "$lock"
+  bundle_ok "$bundle" || die "failed to install the viewer bundle: $bundle"
   # Other plugin versions may build or launch their bundle right now, so
   # drop only bundles, temp dirs and legacy binaries unused for over a day.
   find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' -mtime +0 \
@@ -516,7 +531,10 @@ start_session() {
     fi
     [[ -n "$pid" ]] || pid="$(session_pid "$SESSION_DIR")"
     # Before DIR/pid the viewer logs only when it fails (bad option, no
-    # session setup), and then exits.
+    # session setup), and then exits. Read DIR/pid again in case it was
+    # written just after the first read.
+    [[ -n "$pid" || ! -s "$SESSION_DIR/viewer.log" ]] ||
+      pid="$(session_pid "$SESSION_DIR")"
     if [[ -z "$pid" && -s "$SESSION_DIR/viewer.log" ]]; then
       abandon_session "$SESSION_DIR" error "viewer failed to start"
       startup_failed 5
