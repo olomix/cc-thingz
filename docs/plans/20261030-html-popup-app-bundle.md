@@ -449,30 +449,41 @@ lazily (DIR/pid, else `pgrep -f -- "--session DIR"` checked by
 records its arguments (`FAKE_OPEN_ARGS`) and can fail (`FAKE_OPEN_FAIL`).
 
 ### Task 5: Verify acceptance criteria
-- [ ] verify the bundle is built locally, launched with `open -n -a`, uses
+- [x] verify the bundle is built locally, launched with `open -n -a`, uses
       `.regular`, and has no floating fallback
-- [ ] verify wrapper commands, options, exit codes and events are unchanged
-- [ ] verify no personal data in any new or changed file
-- [ ] run full test suite: `for t in tests/*_test.sh; do "$t" || exit 1; done`
-- [ ] run `shellcheck plugins/html-popup/scripts/*.sh
+- [x] verify wrapper commands, options, exit codes and events are unchanged
+- [x] verify no personal data in any new or changed file
+- [x] run full test suite: `for t in tests/*_test.sh; do "$t" || exit 1; done`
+- [x] run `shellcheck plugins/html-popup/scripts/*.sh
       plugins/html-popup/viewer/*.sh plugins/html-popup/examples/*/*.sh
       tests/html-popup_test.sh tests/fixtures/*.sh`
 
+Result: a real `show --timeout 4` popup ran from
+`<cache>/html-popup-viewer-<hash>.app/Contents/MacOS/…` with parent pid 1,
+activation policy regular, and was the frontmost app ("HTML Popup") ~2 s
+after launch; it closed with `ready` then `closed`/`timeout`. Compared with
+the pre-plan wrapper: same commands, options, closed-event format and
+SKILL.md (unchanged); only the `build` help line now says "viewer app".
+The old "viewer did not start" exit 5 is gone with the exec wait; a
+viewer missing at the ready deadline exits 3, an `open` failure exits 2,
+both within the existing exit-code table. 542 + 230 assertions pass, 0
+skipped; `shellcheck` is clean.
+
 ### Task 6: [Final] Update documentation
-- [ ] README html-popup section: the viewer is built as a local "HTML
+- [x] README html-popup section: the viewer is built as a local "HTML
       Popup" app, shows in Cmd-Tab/Dock while open, no signing needed,
       each popup is its own Cmd-Tab entry
-- [ ] SKILL.md: only agent-visible changes (TCC note: Task 1 found that a
+- [x] SKILL.md: only agent-visible changes (TCC note: Task 1 found that a
       page or `--data` under `~/Documents`, `~/Desktop` or `~/Downloads`
       triggers a macOS access prompt, again after each viewer rebuild, and
       startup may time out (exit 3) while it is open, so write generated
       pages to the system temp dir; sandboxed Bash may also need access to
       LaunchServices)
-- [ ] ➕ README: the same TCC note for users (one prompt per viewer
+- [x] ➕ README: the same TCC note for users (one prompt per viewer
       build for pages under protected folders)
-- [ ] CLAUDE.md: committed generated assets (`AppIcon.icns`) with their
+- [x] CLAUDE.md: committed generated assets (`AppIcon.icns`) with their
       regeneration script, and the `HTML_POPUP_OPEN` test override
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/` (done by the orchestrator after reviews)
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*

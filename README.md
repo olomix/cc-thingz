@@ -173,9 +173,13 @@ this", "ask me which month", or when it needs you to pick or fill in
 something.
 
 The window is a small WebKit viewer with a native frame: a transparent title
-bar, draggable, standard Edit shortcuts in form fields, Esc/Cmd-W to close,
-and no Dock icon. It runs detached from the calling command, so a Bash call
-that times out or is killed never closes it. There are three modes:
+bar, draggable, standard Edit shortcuts in form fields, Esc/Cmd-W to close.
+It runs as a regular app called "HTML Popup": the window takes keyboard focus
+when it opens, and while it is open the app shows in the Dock and Cmd-Tab
+with its own icon. Each popup is a separate app instance, so two open popups
+are two Cmd-Tab entries. The viewer is launched through LaunchServices,
+detached from the calling command, so a Bash call that times out or is killed
+never closes it. There are three modes:
 
 - **show** — open a page for viewing and return once it has loaded.
 - **ask** — open a page and wait for your answer (e.g. a picked month), print
@@ -200,15 +204,24 @@ solar generation report from public EIA data where choosing a month gets a
 details panel computed by `run.sh`.
 
 The viewer is a single Swift source file, compiled with `swiftc` on first use
-(a few seconds) and cached by source hash in
+(a few seconds) and assembled with the committed `Info.plist` and icon into a
+local `.app` bundle, cached by input hash in
 `${CLAUDE_PLUGIN_DATA:-~/Library/Caches/html-popup}`; no binary is committed,
-and plugin updates rebuild it automatically.
+and plugin updates rebuild it automatically. The bundle is built on your Mac
+and never downloaded, so it needs no signing or notarization.
 
 ### Requirements
 
 macOS with a GUI session, the Xcode Command Line Tools (`swiftc`), and `jq`.
 `html-popup.sh check` reports any missing piece. Sandboxed Bash may block the
-cache dir or the window server.
+cache dir, the window server or the LaunchServices launch.
+
+Because the viewer is its own app, a page or data file under `~/Documents`,
+`~/Desktop` or `~/Downloads` makes macOS ask whether "HTML Popup" may access
+that folder. The prompt comes once per viewer build (again after a plugin
+update rebuilds it), and the viewer waits for your answer; if that takes over
+10 s the call fails with exit 3 and can simply be repeated. Pages in a temp
+dir, where Claude normally writes them, never prompt.
 
 ### Install
 
@@ -231,7 +244,8 @@ shellcheck tests/dotfiles_test.sh plugins/dotfiles/scripts/*.sh
 tests/dotfiles_test.sh
 
 shellcheck tests/html-popup_test.sh plugins/html-popup/scripts/*.sh \
-  plugins/html-popup/examples/*/*.sh tests/fixtures/fake-swiftc.sh
+  plugins/html-popup/viewer/*.sh plugins/html-popup/examples/*/*.sh \
+  tests/fixtures/fake-swiftc.sh tests/fixtures/fake-open.sh
 tests/html-popup_test.sh
 ```
 
@@ -242,7 +256,8 @@ they never call the real binary or the network; the dotfiles tests build a
 throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
 `DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`; the
 html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
-cache dir, while its viewer tests compile the real viewer and drive invisible
+cache dir, its fake-viewer tests replace `open` via `HTML_POPUP_OPEN`, while
+its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
 `swiftc` is installed and the session is a GUI (Aqua) login, and tests that
 run the wrapper's build step or fake viewers are skipped off macOS.

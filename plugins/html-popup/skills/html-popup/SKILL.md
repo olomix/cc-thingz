@@ -131,5 +131,8 @@ what it already printed (`DIR/cursor`).
   ahead of time) into
   `${CLAUDE_PLUGIN_DATA:-~/Library/Caches/html-popup}`; later uses reuse it.
 - On any exit 2, or a window that never appears, run `"$P" check` first.
-- Sandboxed Bash may block the cache dir or the window server; if `check`
-  fails on those, rerun the command outside the sandbox.
+- Sandboxed Bash may block the cache dir, the window server or the
+  LaunchServices launch (`open`); if so, rerun outside the sandbox.
+- A page or `--data` under `~/Documents`, `~/Desktop` or `~/Downloads`
+  triggers a macOS access prompt (once per viewer build) and startup may
+  exit 3 while it is open: keep pages in a temp/scratch dir.
