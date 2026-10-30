@@ -8,10 +8,12 @@
 #   FAKE_SWIFTC_FAIL=1     write a partial output, then exit 1
 #   FAKE_SWIFTC_BODY=SH    bash code for the stub (default: exit 0), so
 #                          wrapper tests can run a scripted fake viewer
-#   FAKE_SWIFTC_EXEC_DELAY=SEC  stub sleeps before taking the viewer name,
-#                          like a viewer slow to exec
-#   FAKE_SWIFTC_NO_PID=1   stub never writes DIR/pid (the real viewer and the
-#                          stub write it after exec, before their work)
+#   FAKE_SWIFTC_START_GATE=FILE  stub waits (up to 60 s) for FILE before it
+#                          takes the viewer name and writes DIR/pid, like a
+#                          viewer slow to start
+#
+# Like the real viewer, the stub writes DIR/pid before its body and exits 3
+# without events if DIR/abandoned exists by then.
 set -euo pipefail
 
 out=""
@@ -44,11 +46,16 @@ fi
 cat >"$out" <<EOF
 #!/bin/bash
 if [[ -z "\${FAKE_VIEWER_NAMED:-}" ]]; then
-  sleep ${FAKE_SWIFTC_EXEC_DELAY:-0}
+  gate='${FAKE_SWIFTC_START_GATE:-}'
+  for ((i = 0; i < 1200; i++)); do
+    [[ -z "\$gate" || -e "\$gate" ]] && break
+    sleep 0.05
+  done
   FAKE_VIEWER_NAMED=1 exec -a "\$0" /bin/bash "\$0" "\$@"
 fi
-if [[ -z "${FAKE_SWIFTC_NO_PID:-}" && "\${2:-}" == --session ]]; then
+if [[ "\${2:-}" == --session ]]; then
   printf '%s\\n' "\$\$" >"\$3/pid"
+  [[ -e "\$3/abandoned" ]] && exit 3
 fi
 idle() { local i; for ((i = 0; i < \$1 * 5; i++)); do sleep 0.2; done; }
 ${FAKE_SWIFTC_BODY:-exit 0}

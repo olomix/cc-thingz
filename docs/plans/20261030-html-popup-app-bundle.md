@@ -218,7 +218,7 @@ squircle stays transparent.
 ### Info.plist template (`viewer/Info.plist`)
 Keys: `CFBundleName` and `CFBundleDisplayName` = `HTML Popup`,
 `CFBundleIdentifier` = `com.github.olomix.html-popup`,
-`CFBundleExecutable` = `@EXECUTABLE@` (filled in at build time),
+`CFBundleExecutable` = `html-popup-viewer` (static file, copied as is),
 `CFBundleIconFile` = `AppIcon`, `CFBundlePackageType` = `APPL`,
 `NSHighResolutionCapable` = true, `LSMinimumSystemVersion` = `13.0` (the
 viewer has a pre-14 activation fallback; adjust if the code needs more).
@@ -228,18 +228,19 @@ it a runtime `.regular` app does not take focus.
 ### Bundle layout in the cache
 ```
 $CACHE_DIR/html-popup-viewer-<hash>.app/
-  Contents/Info.plist                     (template, @EXECUTABLE@ filled in)
-  Contents/MacOS/html-popup-viewer-<hash> (compiled binary)
+  Contents/Info.plist                     (copied from viewer/Info.plist)
+  Contents/MacOS/html-popup-viewer        (compiled binary)
   Contents/Resources/AppIcon.icns
 ```
 - `<hash>` = first 12 hex chars of
-  `cat LAYOUT_VERSION_LINE swift Info.plist AppIcon.icns | shasum -a 256`,
-  where the layout version is a constant in the wrapper, so a change to how
-  the bundle is assembled also rebuilds.
+  `{ declare -f build_viewer; cat swift Info.plist AppIcon.icns; } |
+  shasum -a 256`: the `build_viewer` body is part of the key, so a change
+  to how the bundle is assembled also rebuilds.
 - Assemble into `<bundle>.tmp.$$/`, then `mv "$tmp" "$bundle"`. BSD `mv`
   has no `-T`: if another builder finished first, the temp dir lands
   inside the bundle. After the `mv`, remove `"$bundle/${tmp##*/}"` if it
-  exists. The bundle root must contain only `Contents`.
+  exists. The bundle root must contain only `Contents`. A bundle that lost
+  its executable is removed before the `mv`, so it is rebuilt.
 - `build` prints the bundle path. Touch the bundle on a cache hit.
 - Prune `html-popup-viewer-*.app` and `*.app.tmp.*` unused for over a day
   with `rm -rf`, and legacy loose `html-popup-viewer-<hash>` binaries.
@@ -253,10 +254,10 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   --args "$page" --session "$DIR" [viewer options...]
 ```
 - `open` opens `--stdout`/`--stderr` paths separately (append behaviour
-  undocumented), so stdout goes to `/dev/null` and only stderr to the log;
-  the viewer's own `freopen(…, "a")` keeps appending. Task 1 confirmed
-  that pre-`freopen` output (e.g. option parse errors) reaches `viewer.log`
-  and that `--stderr` appends.
+  undocumented), so stdout goes to `/dev/null` and only stderr to the log.
+  `--stderr` is the only log redirect (the viewer no longer `freopen`s), so
+  option parse errors reach `viewer.log` too; Task 1 confirmed it appends.
+  Viewer tests that run the binary directly redirect stderr themselves.
 - An app launched by LaunchServices starts with cwd `/` and without the
   caller's environment, so the wrapper passes absolute paths for the page,
   `--data`, `--session` and the test script, and forwards
@@ -266,16 +267,20 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   that case is still detected by the pid handshake and ready wait.
 
 ### Pid handshake
-- After `open` returns, the wrapper polls (every `FIFO_POLL`) for a
-  process whose `viewer_alive "$DIR" PID` is true, found via
-  `pgrep -f -- "--session $DIR"` or `DIR/pid` written by the viewer,
-  whichever comes first, and writes `DIR/pid` itself as today.
+- The viewer writes `DIR/pid` itself; the wrapper only reads it (no
+  `pgrep` fallback), lazily in each wait loop, and `viewer_alive` checks
+  the process name `html-popup-viewer` plus `--session DIR`.
+- Before `DIR/pid` exists the viewer writes to its log only when it fails
+  (bad option, session setup), so a non-empty `viewer.log` with no pid
+  ends startup at once: the session is abandoned and the wrapper exits 5
+  with the log tail. Every "not ready" exit 3 also prints the log tail.
+- `HTML_POPUP_READY_WAIT` overrides the 10 s ready deadline (tests).
 - The wait is bounded by the remaining ready budget (`ready_by`, and the
   `ask --wait` budget), not by `CLOSE_WAIT`.
 - `require_session` accepts a session that has `ready_by` but no `pid` yet
   ("still starting"): `ask --resume` / `live wait` keep waiting and exit 4
-  while it is still starting, so the "slow to exec exits 4" behaviour is
-  kept.
+  while it is still starting, and `live send` exits 4 too, so the "slow to
+  exec exits 4" behaviour is kept.
 - When the ready deadline passes with no viewer, the wrapper writes
   `DIR/abandoned`, appends `closed` with `reason: error` and exits 3 (as
   for "not ready in 10 s" today). A viewer that starts later sees
@@ -291,8 +296,10 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   1" assertions keep their meaning) and execs
   `BUNDLE/Contents/MacOS/*` with the arguments and redirections.
 - The fake-swiftc stub writes `$$` to the `--session` dir's `pid` after
-  its `exec -a` and before its body, like the real viewer, with a knob for
-  a stub that never writes it.
+  its `exec -a` and before its body, then exits 3 if `DIR/abandoned`
+  exists, like the real viewer. `FAKE_SWIFTC_START_GATE=FILE` holds it
+  before the `exec -a` until FILE exists, so start-up races are tested
+  without sleeps.
 
 ### Viewer
 - `app.setActivationPolicy(testMode ? .accessory : .regular)`, set after
@@ -302,7 +309,11 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   `dropLaunchFloatIfFocused`). Keep `makeKeyAndOrderFront`,
   `orderFrontRegardless` and `NSApp.activate()`.
 - Exit early if `DIR/abandoned` exists after session setup, and check
-  again after the page check and data load, before the window is made.
+  again after the page check and data load, before the window is made and
+  before a page/data error is written as `closed`, so an abandoned session
+  never gets a second `closed`.
+- No `setsid()`: under LaunchServices the viewer is not in the caller's
+  process group.
 - `window.isRestorable = false` (a regular app with a fixed bundle id may
   otherwise get saved-state restore).
 - Update stale comments (wrapper writes pid; "unbundled binary has no

@@ -20,20 +20,23 @@
 #                           (tests use a fake)
 #   HTML_POPUP_OPEN         launcher to use instead of open (tests use a fake)
 #   HTML_POPUP_TEST_SCRIPT  JS file run after page load; headless test mode
+#   HTML_POPUP_READY_WAIT   seconds a page has to get ready (default 10;
+#                           tests shorten it)
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIEWER_SRC="$PLUGIN_ROOT/viewer/html-popup-viewer.swift"
 VIEWER_PLIST="$PLUGIN_ROOT/viewer/Info.plist"
 VIEWER_ICON="$PLUGIN_ROOT/viewer/AppIcon.icns"
-# Part of the cache key: bump it when the bundle is assembled differently.
-BUNDLE_LAYOUT=1
+VIEWER_NAME=html-popup-viewer
 CACHE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}"
 TMP_ROOT="${TMPDIR:-/tmp}"
 TMP_ROOT="${TMP_ROOT%/}"
+# The viewer gets the session path but starts in /, so it must be absolute.
+[[ "$TMP_ROOT" == /* ]] || TMP_ROOT="$PWD/$TMP_ROOT"
 
 DEFAULT_WAIT=100
-READY_WAIT=10
+READY_WAIT="${HTML_POPUP_READY_WAIT:-10}"
 CLOSE_WAIT=5
 POLL=0.2
 # Short: a blocked FIFO write takes milliseconds.
@@ -125,27 +128,21 @@ pid_alive() {
 }
 
 # viewer_path : print the cached app bundle path for the current viewer.
-# The hash of its inputs is the cache key, so plugin updates rebuild.
+# The hash of its inputs is the cache key, so plugin updates rebuild; the
+# build_viewer body is one of them, so does a change to the bundle layout.
 viewer_path() {
   local hash
   hash="$({
-    printf 'layout %s\n' "$BUNDLE_LAYOUT"
+    declare -f build_viewer
     cat "$VIEWER_SRC" "$VIEWER_PLIST" "$VIEWER_ICON"
   } | shasum -a 256)"
-  printf '%s/html-popup-viewer-%s.app' "$CACHE_DIR" "${hash:0:12}"
-}
-
-# viewer_exec <bundle> : print the executable inside a viewer bundle. It is
-# named like the bundle, which is how viewer_alive recognises the viewer.
-viewer_exec() {
-  local name="${1##*/}"
-  printf '%s/Contents/MacOS/%s' "$1" "${name%.app}"
+  printf '%s/%s-%s.app' "$CACHE_DIR" "$VIEWER_NAME" "${hash:0:12}"
 }
 
 # build_viewer : build the viewer app bundle unless cached; print its path.
 build_viewer() {
   (($# == 0)) || die "unexpected argument: $1"
-  local failed=0 bundle name tmp exe
+  local failed=0 bundle tmp exe
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
@@ -155,10 +152,9 @@ build_viewer() {
   [[ -r "$VIEWER_ICON" ]] || die "viewer icon not found: $VIEWER_ICON"
 
   bundle="$(viewer_path)"
-  name="${bundle##*/}"
-  name="${name%.app}"
+  exe="Contents/MacOS/$VIEWER_NAME"
   # Touch on use: pruning below spares bundles used within the last day.
-  if [[ -x "$(viewer_exec "$bundle")" ]] && touch "$bundle"; then
+  if [[ -x "$bundle/$exe" ]] && touch "$bundle"; then
     printf '%s\n' "$bundle"
     return 0
   fi
@@ -167,19 +163,19 @@ build_viewer() {
   tmp="$bundle.tmp.$$"
   rm -rf "$tmp"
   mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources"
-  exe="$tmp/Contents/MacOS/$name"
-  if ! "${SWIFTC[@]}" -O -o "$exe" "$VIEWER_SRC" >&2; then
+  if ! "${SWIFTC[@]}" -O -o "$tmp/$exe" "$VIEWER_SRC" >&2; then
     rm -rf "$tmp"
     die "failed to compile the viewer"
   fi
-  sed "s/@EXECUTABLE@/$name/" "$VIEWER_PLIST" >"$tmp/Contents/Info.plist"
+  cp "$VIEWER_PLIST" "$tmp/Contents/Info.plist"
   cp "$VIEWER_ICON" "$tmp/Contents/Resources/AppIcon.icns"
+  # A bundle without its executable was damaged; mv would not replace it.
+  [[ -x "$bundle/$exe" ]] || rm -rf "$bundle"
   # If another build installed the bundle first, mv fails (macOS refuses a
   # non-empty target) or, lacking -T, moves ours inside it. Keep theirs.
   mv "$tmp" "$bundle" 2>/dev/null || true
   rm -rf "$tmp" "${bundle:?}/${tmp##*/}"
-  [[ -x "$(viewer_exec "$bundle")" ]] ||
-    die "failed to install the viewer bundle: $bundle"
+  [[ -x "$bundle/$exe" ]] || die "failed to install the viewer bundle: $bundle"
   # Other plugin versions may build or launch their bundle right now, so
   # drop only bundles, temp dirs and legacy binaries unused for over a day.
   find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' -mtime +0 \
@@ -210,7 +206,7 @@ viewer_alive() {
   local comm args rest
   pid_alive "$2" || return 1
   comm="$(ps -ww -p "$2" -o comm= 2>/dev/null)" || return 1
-  [[ "${comm##*/}" == html-popup-viewer-* ]] || return 1
+  [[ "${comm##*/}" == "$VIEWER_NAME" ]] || return 1
   args="$(ps -ww -p "$2" -o args= 2>/dev/null)" || return 1
   # The page path or title may contain " --session ", so try each one.
   rest="$args"
@@ -221,8 +217,13 @@ viewer_alive() {
   return 1
 }
 
+# session_pid <dir> : print the viewer pid, or nothing while the viewer is
+# still starting. open does not report the pid: the viewer writes DIR/pid.
 session_pid() {
-  tr -d '[:space:]' 2>/dev/null <"$1/pid" || true
+  local pid
+  pid="$(tr -d '[:space:]' 2>/dev/null <"$1/pid" || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && printf '%s' "$pid"
+  return 0
 }
 
 # require_session <dir> : exit 2 unless dir looks like a session dir. One
@@ -230,25 +231,6 @@ session_pid() {
 require_session() {
   [[ -n "$1" ]] || die "missing session DIR"
   [[ -f "$1/pid" || -f "$1/ready_by" ]] || die "not an html-popup session: $1"
-}
-
-# find_viewer <dir> : print the session's viewer pid, or nothing while it is
-# still starting. open does not report the pid: the viewer writes DIR/pid,
-# else a live viewer found by its --session argument is recorded there.
-find_viewer() {
-  local pid
-  pid="$(session_pid "$1")"
-  if [[ "$pid" =~ ^[0-9]+$ ]]; then
-    printf '%s' "$pid"
-    return 0
-  fi
-  for pid in $(pgrep -f -- "--session $1" 2>/dev/null); do
-    viewer_alive "$1" "$pid" || continue
-    printf '%s\n' "$pid" >"$1/pid.tmp.$$"
-    mv -f "$1/pid.tmp.$$" "$1/pid"
-    printf '%s' "$pid"
-    return 0
-  done
 }
 
 # complete_events <dir> : print the newline-terminated lines of events.jsonl
@@ -414,16 +396,24 @@ remove_stale_sessions() {
 
 # abandon_session <dir> <reason> [message] : end a session whose viewer may
 # still be starting. The viewer writes DIR/pid before it checks
-# DIR/abandoned, so either it exits on its own or find_viewer sees it here.
+# DIR/abandoned, so either it exits on its own or its pid is read here.
 abandon_session() {
   : >"$1/abandoned"
-  terminate_viewer "$1" "$(find_viewer "$1")" "${@:2}"
+  terminate_viewer "$1" "$(session_pid "$1")" "${@:2}"
+}
+
+# fail_with_log <dir> <code> <message> : report a failed session with the
+# tail of its viewer log, then exit.
+fail_with_log() {
+  printf 'html-popup: %s; %s/viewer.log:\n' "$3" "$1" >&2
+  tail -n 5 "$1/viewer.log" >&2 2>/dev/null || true
+  exit "$2"
 }
 
 # abandon_not_ready <dir> : give up on a page that missed the ready deadline.
 abandon_not_ready() {
   abandon_session "$1" error "page not ready after ${READY_WAIT}s"
-  die "page not ready after ${READY_WAIT}s; see $1/viewer.log" 3
+  fail_with_log "$1" 3 "page not ready after ${READY_WAIT}s"
 }
 
 # abs_path <path> : the path made absolute; an app launched through
@@ -438,9 +428,7 @@ abs_path() {
 
 # startup_failed <code> : report a viewer that ended before ready, then exit.
 startup_failed() {
-  printf 'html-popup: viewer exited before the page was ready; log:\n' >&2
-  tail -n 5 "$SESSION_DIR/viewer.log" >&2 || true
-  exit "$1"
+  fail_with_log "$SESSION_DIR" "$1" "viewer exited before the page was ready"
 }
 
 # start_session <page> [opts...] : validate, build, start a detached viewer
@@ -503,7 +491,7 @@ start_session() {
   fi
 
   bundle="$(build_viewer)" || exit 2
-  SESSION_DIR="$(abs_path "$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")")"
+  SESSION_DIR="$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")"
   printf '%s\n' "$(($(date +%s) + READY_WAIT))" >"$SESSION_DIR/ready_by"
 
   # -n: each popup is its own app instance. open exits 0 even when the
@@ -526,7 +514,13 @@ start_session() {
       EARLY_CLOSE=1
       return 0
     fi
-    [[ -n "$pid" ]] || pid="$(find_viewer "$SESSION_DIR")"
+    [[ -n "$pid" ]] || pid="$(session_pid "$SESSION_DIR")"
+    # Before DIR/pid the viewer logs only when it fails (bad option, no
+    # session setup), and then exits.
+    if [[ -z "$pid" && -s "$SESSION_DIR/viewer.log" ]]; then
+      abandon_session "$SESSION_DIR" error "viewer failed to start"
+      startup_failed 5
+    fi
     if [[ -n "$pid" ]] && ! viewer_alive "$SESSION_DIR" "$pid"; then
       has_event "$SESSION_DIR" ready closed ||
         await_forced_close "$SESSION_DIR" || startup_failed 5
@@ -569,7 +563,7 @@ wait_answer() {
         *) die "window closed without an answer" 1 ;;
       esac
     fi
-    [[ -n "$pid" ]] || pid="$(find_viewer "$dir")"
+    [[ -n "$pid" ]] || pid="$(session_pid "$dir")"
     if [[ -n "$pid" ]] && ! viewer_alive "$dir" "$pid"; then
       has_event "$dir" answer closed && continue
       await_forced_close "$dir" && continue
@@ -691,18 +685,23 @@ write_inbound() {
 
 # session_over <dir> : true when the window has closed or its viewer is gone.
 session_over() {
-  has_event "$1" closed || ! viewer_alive "$1" "$(find_viewer "$1")"
+  has_event "$1" closed || ! viewer_alive "$1" "$(session_pid "$1")"
 }
 
 cmd_live_send() {
   (($# == 2)) || die "usage: html-popup.sh live send DIR JSON"
-  local dir="$1" line
+  local dir="$1" line pid
   require_jq
   require_session "$dir"
   # Exactly one JSON value, compacted onto one line for the FIFO protocol.
   line="$(printf '%s' "$2" |
     jq -cs 'if length == 1 then .[0] else error("one value expected") end' \
       2>/dev/null)" || die "not a single JSON value: $2"
+  pid="$(session_pid "$dir")"
+  if [[ -z "$pid" ]] && ! has_event "$dir" closed; then
+    ready_overdue "$dir" && abandon_not_ready "$dir"
+    die "window is still starting; send again: $dir" 4
+  fi
   session_over "$dir" && die "window is closed: $dir" 1
   [[ -p "$dir/in" ]] || die "session has no inbound FIFO: $dir" 1
   write_inbound "$dir" "$line" || die "window closed while sending: $dir" 1
@@ -739,7 +738,7 @@ cmd_live_wait() {
       fi
       exit 0
     fi
-    [[ -n "$pid" ]] || pid="$(find_viewer "$dir")"
+    [[ -n "$pid" ]] || pid="$(session_pid "$dir")"
     if has_event "$dir" closed ||
       { [[ -n "$pid" ]] && ! viewer_alive "$dir" "$pid"; }; then
       # The last events may have landed after the batch was read.
@@ -760,7 +759,7 @@ cmd_live_close() {
   require_jq
   require_session "$dir"
   has_event "$dir" closed && return 0
-  pid="$(find_viewer "$dir")"
+  pid="$(session_pid "$dir")"
   if [[ -z "$pid" ]]; then
     abandon_session "$dir" agent
     return 0

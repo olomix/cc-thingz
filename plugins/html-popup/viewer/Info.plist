@@ -9,7 +9,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.github.olomix.html-popup</string>
 	<key>CFBundleExecutable</key>
-	<string>@EXECUTABLE@</string>
+	<string>html-popup-viewer</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>

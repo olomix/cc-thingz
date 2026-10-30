@@ -219,9 +219,10 @@ cache dir, the window server or the LaunchServices launch.
 Because the viewer is its own app, a page or data file under `~/Documents`,
 `~/Desktop` or `~/Downloads` makes macOS ask whether "HTML Popup" may access
 that folder. The prompt comes once per viewer build (again after a plugin
-update rebuilds it), and the viewer waits for your answer; if that takes over
-10 s the call fails with exit 3 and can simply be repeated. Pages in a temp
-dir, where Claude normally writes them, never prompt.
+update rebuilds it). Answer it within 10 s; otherwise the call fails with
+exit 3 and its viewer is stopped, and the call works once repeated after you
+answer. Pages in a temp dir, where Claude normally writes them, never
+prompt.
 
 ### Install
 
@@ -260,7 +261,10 @@ cache dir, its fake-viewer tests replace `open` via `HTML_POPUP_OPEN`, while
 its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
 `swiftc` is installed and the session is a GUI (Aqua) login, and tests that
-run the wrapper's build step or fake viewers are skipped off macOS.
+run the wrapper's build step or fake viewers are skipped off macOS. After
+editing `plugins/html-popup/viewer/AppIcon.svg`, run
+`plugins/html-popup/viewer/make-icon.sh` (macOS 14+) and commit the new
+`AppIcon.icns`.
 
 ## License
 

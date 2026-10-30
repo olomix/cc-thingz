@@ -172,20 +172,12 @@ final class EventLog {
     }
 }
 
-// Prepare the session dir: own session, log, FIFO, pid file, events.
+// Prepare the session dir: FIFO, pid file, events. stderr is not touched:
+// the launcher (open --stderr) sends it to DIR/viewer.log, so option errors
+// that come before this point land there too.
 func startSession(_ dir: String) throws -> (events: EventLog, inbound: Int32) {
-    // Leave the caller's process group so a killed agent shell or a Ctrl-C
-    // in it does not take the window down. Fails harmlessly if we already
-    // lead a group.
-    _ = setsid()
-
     try FileManager.default.createDirectory(
         atPath: dir, withIntermediateDirectories: true)
-
-    let logPath = dir + "/viewer.log"
-    if freopen(logPath, "a", stderr) == nil {
-        throw ViewerError(message: "cannot open \(logPath): \(errnoText())")
-    }
 
     let fifo = dir + "/in"
     if mkfifo(fifo, 0o600) != 0 && errno != EEXIST {
@@ -695,22 +687,22 @@ func exitIfAbandoned() {
 exitIfAbandoned()
 
 let pageURL = URL(fileURLWithPath: options.page).standardizedFileURL
-if !FileManager.default.isReadableFile(atPath: pageURL.path) {
-    events.close(
-        .error, message: "page not found or not readable: \(options.page)")
-}
-
+var inputError: String?
 var dataJSON: String?
-if let dataPath = options.data {
+if !FileManager.default.isReadableFile(atPath: pageURL.path) {
+    inputError = "page not found or not readable: \(options.page)"
+} else if let dataPath = options.data {
     do {
         dataJSON = try loadData(dataPath)
     } catch {
-        events.close(.error, message: error.localizedDescription)
+        inputError = error.localizedDescription
     }
 }
 
-// A macOS access prompt for protected folders can block the reads above.
+// A macOS access prompt for protected folders can block the reads above;
+// an abandoned session already has its closed event.
 exitIfAbandoned()
+if let inputError { events.close(.error, message: inputError) }
 
 let app = NSApplication.shared
 // Focus on launch needs a regular app; headless test windows stay out of

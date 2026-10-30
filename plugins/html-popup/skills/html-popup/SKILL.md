@@ -109,7 +109,7 @@ what it already printed (`DIR/cursor`).
 | 1 | window closed (no answer for `ask`, also on window `--timeout`; session over for `wait`/`send`) |
 | 2 | usage error (incl. bad `--size`/`--timeout`, `live send` text that is not exactly one JSON value), missing dependency, build failure, not a session DIR |
 | 3 | page or data invalid, page failed to load or not ready in 10 s |
-| 4 | `--wait` expired; the window is still open: call again |
+| 4 | `--wait` expired, or `live send` before the window started; the window is still open: call again |
 | 5 | viewer died without a `closed` event (see `DIR/viewer.log`) |
 
 ## Waiting for a human

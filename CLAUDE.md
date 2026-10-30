@@ -28,6 +28,9 @@ This is a hard rule for both **writing code** and **reviewing changes**:
 * Swap external tools through env vars so tests never run the real ones:
   `HTML_POPUP_SWIFTC` (compiler) and `HTML_POPUP_OPEN` (LaunchServices
   launcher, faked by `tests/fixtures/fake-open.sh`).
+* A viewer launched via `open` writes its own `DIR/pid`; its stderr goes to
+  `DIR/viewer.log` (`open --stderr`). Until the pid file appears the session
+  has only `ready_by`.
 * Tests that need macOS, a compiler or a GUI session must skip with a clear
   message when those are missing (see `skip_unless_macos` and
   `skip_unless_gui` in `tests/html-popup_test.sh`); all other tests must run
