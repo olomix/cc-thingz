@@ -30,8 +30,9 @@ struct Options {
     var testScript: String?
 }
 
-struct ViewerError: Error {
+struct ViewerError: LocalizedError {
     let message: String
+    var errorDescription: String? { message }
 }
 
 let usage = """
@@ -112,7 +113,8 @@ func errnoText() -> String { String(cString: strerror(errno)) }
 
 func jsonString(_ text: String) -> String {
     let data = try? JSONSerialization.data(
-        withJSONObject: text, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+        withJSONObject: text,
+        options: [.fragmentsAllowed, .withoutEscapingSlashes])
     return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
 }
 
@@ -194,7 +196,9 @@ func startSession(_ dir: String) throws -> (events: EventLog, inbound: Int32) {
     guard inbound >= 0 else {
         throw ViewerError(message: "cannot open \(fifo): \(errnoText())")
     }
-    try "\(getpid())\n".write(toFile: dir + "/pid", atomically: true, encoding: .utf8)
+    // For standalone runs; the wrapper writes the same pid right after launch.
+    try "\(getpid())\n".write(
+        toFile: dir + "/pid", atomically: true, encoding: .utf8)
     return (try EventLog(path: dir + "/events.jsonl"), inbound)
 }
 
@@ -240,24 +244,29 @@ func parseInbound(_ line: Data) -> Inbound? {
         log("dropped inbound line that is not JSON: \(text.prefix(200))")
         return nil
     }
-    if let object = value as? [String: String], object == ["htmlPopup": "close"] {
+    if let object = value as? [String: String],
+        object == ["htmlPopup": "close"]
+    {
         return .close
     }
     return .message(text)
 }
 
 // Read and validate --data. Returns the JSON text, kept as-is so numbers
-// reach the page exactly as written. The page's JSON.parse takes only
-// UTF-8 text without a BOM, though JSONSerialization also accepts UTF-16/32.
+// reach the page exactly as written. Require UTF-8 without a BOM: the page
+// decodes it with JSON.parse.
 func loadData(_ path: String) throws -> String {
     guard var bytes = FileManager.default.contents(atPath: path) else {
-        throw ViewerError(message: "data file not found or not readable: \(path)")
+        throw ViewerError(
+            message: "data file not found or not readable: \(path)")
     }
     if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { bytes.removeFirst(3) }
     guard let text = String(data: bytes, encoding: .utf8),
-        (try? JSONSerialization.jsonObject(with: bytes, options: .fragmentsAllowed)) != nil
+        (try? JSONSerialization.jsonObject(
+            with: bytes, options: .fragmentsAllowed)) != nil
     else {
-        throw ViewerError(message: "data file is not valid JSON (UTF-8 expected): \(path)")
+        throw ViewerError(
+            message: "data file is not valid JSON (UTF-8 expected): \(path)")
     }
     return text
 }
@@ -298,9 +307,11 @@ func bridgeSource(dataJSON: String?) -> String {
           // Decide after dispatch ends, so page listeners added later on
           // document or window can still call preventDefault().
           document.addEventListener("keydown", (event) => {
-            if (event.key !== "Escape" || editable(document.activeElement)) return;
+            if (event.key !== "Escape") return;
+            if (editable(document.activeElement)) return;
             setTimeout(() => {
-              if (!event.defaultPrevented && popup.closeOnEscape) post("escape");
+              if (event.defaultPrevented || !popup.closeOnEscape) return;
+              post("escape");
             }, 0);
           });
         })();
@@ -338,28 +349,10 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
 
-        let frame = NSRect(x: 0, y: 0, width: options.width, height: options.height)
-        let window = NSWindow(
-            contentRect: frame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable,
-                        .fullSizeContentView],
-            backing: .buffered, defer: false)
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.title = options.title ?? pageURL.lastPathComponent
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-
-        let configuration = WKWebViewConfiguration()
-        let content = configuration.userContentController
-        content.add(self, name: messageHandlerName)
-        content.addUserScript(WKUserScript(
-            source: bridgeSource(dataJSON: dataJSON),
-            injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let web = WKWebView(frame: frame, configuration: configuration)
-        web.autoresizingMask = [.width, .height]
-        web.navigationDelegate = self
-        web.uiDelegate = self
+        let frame = NSRect(
+            x: 0, y: 0, width: options.width, height: options.height)
+        let window = makeWindow(frame: frame)
+        let web = makeWebView(frame: frame)
 
         let titleBarHeight: CGFloat = 32
         let dragStrip = TitleBarDragView(frame: NSRect(
@@ -387,7 +380,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
 
         if let timeout = options.timeout {
-            DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [events] in
+            let deadline = DispatchTime.now() + timeout
+            DispatchQueue.main.asyncAfter(deadline: deadline) { [events] in
                 events.close(.timeout)
             }
         }
@@ -396,12 +390,41 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
             pageURL, allowingReadAccessTo: pageURL.deletingLastPathComponent())
     }
 
+    private func makeWindow(frame: NSRect) -> NSWindow {
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                        .fullSizeContentView],
+            backing: .buffered, defer: false)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.title = options.title ?? pageURL.lastPathComponent
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        return window
+    }
+
+    private func makeWebView(frame: NSRect) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        let content = configuration.userContentController
+        content.add(self, name: messageHandlerName)
+        content.addUserScript(WKUserScript(
+            source: bridgeSource(dataJSON: dataJSON),
+            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let web = WKWebView(frame: frame, configuration: configuration)
+        web.autoresizingMask = [.width, .height]
+        web.navigationDelegate = self
+        web.uiDelegate = self
+        return web
+    }
+
     // An unbundled binary has no menu; without one, inputs lose the standard
     // Edit shortcuts and Cmd-W does nothing.
     private func makeMainMenu() -> NSMenu {
         func item(_ title: String, _ action: Selector, _ key: String,
                   _ modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            let item = NSMenuItem(
+                title: title, action: action, keyEquivalent: key)
             item.keyEquivalentModifierMask = modifiers
             return item
         }
@@ -438,7 +461,9 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         events.close(.user)
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
         events.close(.user)
     }
 
@@ -457,7 +482,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         case .close?:
             events.close(.agent)
         case .message(let text)?:
-            // The wrapper prints DIR only after ready, so no flow sends earlier.
+            // The wrapper prints DIR only after ready, so no flow sends
+            // earlier.
             if isReady {
                 deliverToPage(text)
             } else {
@@ -471,13 +497,14 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     // The JSON text goes in as a string literal and is JSON.parse'd by the
     // bridge, so agent data is never evaluated as page source.
     private func deliverToPage(_ json: String) {
-        webView?.evaluateJavaScript("window.htmlPopup._receive(\(jsonString(json)))") {
-            _, error in
+        let script = "window.htmlPopup._receive(\(jsonString(json)))"
+        webView?.evaluateJavaScript(script) { _, error in
             if let error { log("message delivery failed: \(error)") }
         }
     }
 
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+    func webView(_ webView: WKWebView,
+                 didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
         navigationFailed(error)
     }
@@ -501,9 +528,13 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     // Web links open in the default browser; the popup only shows local files.
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = action.request.url, let scheme = url.scheme?.lowercased() else {
+    func webView(
+        _ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = action.request.url,
+            let scheme = url.scheme?.lowercased()
+        else {
             decisionHandler(.cancel)
             return
         }
@@ -523,8 +554,11 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     // target=_blank links and window.open() land here.
-    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                 for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for action: WKNavigationAction, windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
         if let url = action.request.url,
             ["http", "https"].contains(url.scheme?.lowercased() ?? "")
         {
@@ -566,7 +600,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     // post directly, so reject anything that is not JSON on one line. Only
     // a raw "\n" splits an event line; U+2028 and friends are fine.
     private func eventData(_ value: Any?) -> String? {
-        guard let text = value as? String, !text.utf8.contains(UInt8(ascii: "\n")),
+        guard let text = value as? String,
+            !text.utf8.contains(UInt8(ascii: "\n")),
             (try? JSONSerialization.jsonObject(
                 with: Data(text.utf8), options: .fragmentsAllowed)) != nil
         else { return nil }
@@ -575,7 +610,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     private func runTestScript(in webView: WKWebView) {
         guard let path = options.testScript else { return }
-        guard let source = try? String(contentsOfFile: path, encoding: .utf8) else {
+        guard let source = try? String(contentsOfFile: path, encoding: .utf8)
+        else {
             log("cannot read test script: \(path)")
             return
         }
@@ -588,17 +624,14 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
 let options: Options
 do {
     options = try parseOptions(Array(CommandLine.arguments.dropFirst()))
-} catch let error as ViewerError {
-    log("\(error.message)\n\(usage)")
+} catch {
+    log("\(error.localizedDescription)\n\(usage)")
     exit(2)
 }
 
 let session: (events: EventLog, inbound: Int32)
 do {
     session = try startSession(options.session)
-} catch let error as ViewerError {
-    log(error.message)
-    exit(2)
 } catch {
     log("cannot set up session: \(error.localizedDescription)")
     exit(2)
@@ -607,15 +640,16 @@ let events = session.events
 
 let pageURL = URL(fileURLWithPath: options.page).standardizedFileURL
 if !FileManager.default.isReadableFile(atPath: pageURL.path) {
-    events.close(.error, message: "page not found or not readable: \(options.page)")
+    events.close(
+        .error, message: "page not found or not readable: \(options.page)")
 }
 
 var dataJSON: String?
 if let dataPath = options.data {
     do {
         dataJSON = try loadData(dataPath)
-    } catch let error as ViewerError {
-        events.close(.error, message: error.message)
+    } catch {
+        events.close(.error, message: error.localizedDescription)
     }
 }
 
@@ -623,7 +657,8 @@ let app = NSApplication.shared
 // No app bundle: run as an accessory so the window can show and take focus
 // without a Dock icon.
 app.setActivationPolicy(.accessory)
-let viewer = Viewer(options: options, pageURL: pageURL, dataJSON: dataJSON, events: events)
+let viewer = Viewer(
+    options: options, pageURL: pageURL, dataJSON: dataJSON, events: events)
 app.delegate = viewer
 startInboundReader(fd: session.inbound, deliver: viewer.receive)
 app.run()

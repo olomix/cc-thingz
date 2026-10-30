@@ -195,9 +195,9 @@ without an answer (or its `--timeout` hit), 2 usage or setup error, 3 page or
 data invalid or page not ready, 4 `--wait` expired with the window still
 open (call again), 5 viewer crashed; the skill's `SKILL.md` has details. The
 plugin also ships a native-looking starter page (`assets/template.html`,
-light/dark aware) and a live example, `examples/solar-2025/`, a 2025 US solar generation
-report from public EIA data where choosing a month gets a details panel
-computed by `run.sh`.
+light/dark aware) and a live example, `examples/solar-2025/`, a 2025 US
+solar generation report from public EIA data where choosing a month gets a
+details panel computed by `run.sh`.
 
 The viewer is a single Swift source file, compiled with `swiftc` on first use
 (a few seconds) and cached by source hash in

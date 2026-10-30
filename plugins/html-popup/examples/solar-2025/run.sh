@@ -12,7 +12,7 @@ data="$here/data.json"
 
 # Figures for month $m (1-12), shared by the page and terminal outputs.
 # shellcheck disable=SC2016 # jq program; $names are jq variables.
-STATS='
+stats='
   def pct(a; b): (a / b * 1000 | round) / 10
     | tostring | if test("\\.") then . else . + ".0" end;
   def num: tostring | [scan("\\d{1,3}(?=(?:\\d{3})*$)")] | join(",");
@@ -33,7 +33,7 @@ STATS='
 '
 
 details_message() {
-  jq -c --argjson m "$1" "$STATS"'
+  jq -c --argjson m "$1" "$stats"'
     | .m as $mo
     | {month: $m, details: {
         "Total solar": "\($mo.total | num) \(.unit)",
@@ -48,22 +48,28 @@ details_message() {
 }
 
 print_details() {
-  jq -r --argjson m "$1" "$STATS"'
+  jq -r --argjson m "$1" "$stats"'
     | def pad(n): tostring | (" " * ([n - length, 0] | max)) + .;
       def rpad(n): tostring | . + (" " * ([n - length, 0] | max));
+      .unit as $unit
+    | def amount(x): "\(x | num | pad(7)) \($unit)   ";
+      def row(name; text): "  " + (name | rpad(19)) + text;
+      def part(name; x; p): row("  " + name; amount(x) + "\(p | pad(4))%");
       .m as $mo
+    | ($mo.total / 100 | round / 10) as $twh
     | "",
       "  \($mo.name) 2025 — US solar generation",
       "  ─────────────────────────────────────────────",
-      "  Total solar        \($mo.total | num | pad(7)) \(.unit)   (\($mo.total / 100 | round / 10) TWh)",
-      "    Utility-scale PV \($mo.utility | num | pad(7)) \(.unit)   \(.split.utility | pad(4))%",
-      "    Small-scale PV   \($mo.small | num | pad(7)) \(.unit)   \(.split.small | pad(4))%",
-      "    Solar thermal    \($mo.thermal | num | pad(7)) \(.unit)   \(.split.thermal | pad(4))%",
+      row("Total solar"; amount($mo.total) + "(\($twh) TWh)"),
+      part("Utility-scale PV"; $mo.utility; .split.utility),
+      part("Small-scale PV"; $mo.small; .split.small),
+      part("Solar thermal"; $mo.thermal; .split.thermal),
       "",
-      "  \("\($mo.name) 2024" | rpad(19))\($mo.total2024 | num | pad(7)) \(.unit)   \(.yoy)% year over year",
-      "  Rank in 2025       #\(.rank) of 12",
-      "  Share of the year  \(.share)% of \(.year | num) \(.unit)",
-      "  Wind, same month   \($mo.wind | num | pad(7)) \(.unit)   solar = \(.ratio)× wind",
+      row("\($mo.name) 2024";
+        amount($mo.total2024) + "\(.yoy)% year over year"),
+      row("Rank in 2025"; "#\(.rank) of 12"),
+      row("Share of the year"; "\(.share)% of \(.year | num) \(.unit)"),
+      row("Wind, same month"; amount($mo.wind) + "solar = \(.ratio)× wind"),
       "",
       "  Source: \(.source)"' "$data"
 }

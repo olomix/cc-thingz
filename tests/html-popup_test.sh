@@ -12,11 +12,28 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/html-popup"
 MARKETPLACE="$REPO_ROOT/.claude-plugin/marketplace.json"
 FAKE_SWIFTC="$SCRIPT_DIR/fixtures/fake-swiftc.sh"
+FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
+WRAPPER="$PLUGIN_DIR/scripts/html-popup.sh"
+TEMPLATE="$PLUGIN_DIR/assets/template.html"
+SOLAR="$PLUGIN_DIR/examples/solar-2025"
+SKILL_MD="$PLUGIN_DIR/skills/html-popup/SKILL.md"
+# The wrapper only treats processes named like the viewer as one.
+FAKE_VIEWER_NAME=html-popup-viewer-fake
 
 PASS_COUNT=0
 SKIP_COUNT=0
 TRACKED_PIDS=()
 TEMP_DIRS=()
+VIEWER_BIN=""
+VIEWER_CACHE=""
+SESSION=""
+EVENTS=""
+WRAP_TMP=""
+
+# session_pid_of <dir> : the viewer pid recorded in a session dir.
+session_pid_of() {
+  tr -d '[:space:]' <"$1/pid"
+}
 
 # assert exits on the first failure, so viewers and temp dirs must be cleaned
 # up from a trap rather than at the end of each test.
@@ -30,7 +47,7 @@ cleanup() {
   for dir in "${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}"; do
     for pidfile in "$dir"/html-popup.*/pid; do
       [[ -f "$pidfile" ]] || continue
-      pid="$(tr -d '[:space:]' <"$pidfile")"
+      pid="$(session_pid_of "${pidfile%/pid}")"
       [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
     done
   done
@@ -97,6 +114,8 @@ not_contains() {
 # skip_unless_gui <test name> : returns non-zero (and records a skip) unless a
 # Swift compiler and an Aqua (GUI login) session are available.
 # Usage: skip_unless_gui "viewer startup" || return 0
+# Not `html-popup.sh check`: that also honours HTML_POPUP_SWIFTC, and tests
+# that need the real viewer must not accept a fake compiler.
 skip_unless_gui() {
   local reason=""
   if ! xcrun --find swiftc >/dev/null 2>&1; then
@@ -138,15 +157,17 @@ test_manifest() {
 
   assert "marketplace.json parses" jq empty "$MARKETPLACE"
   assert_eq "marketplace lists html-popup once" "1" \
-    "$(jq '[.plugins[] | select(.name == "html-popup")] | length' "$MARKETPLACE")"
+    "$(jq '[.plugins[] | select(.name == "html-popup")] | length' \
+      "$MARKETPLACE")"
   assert_eq "marketplace source points at the plugin" "./plugins/html-popup" \
-    "$(jq -r '.plugins[] | select(.name == "html-popup") | .source' "$MARKETPLACE")"
+    "$(jq -r '.plugins[] | select(.name == "html-popup") | .source' \
+      "$MARKETPLACE")"
   assert "marketplace entry has a description" \
     test -n "$(jq -r '.plugins[] | select(.name == "html-popup")
       | .description // empty' "$MARKETPLACE")"
 }
 
-# --- Tests: harness helpers ----------------------------------------------------
+# --- Tests: harness helpers ---------------------------------------------------
 
 test_harness() {
   local dir out rc
@@ -165,7 +186,7 @@ test_harness() {
   assert "skip_unless_gui names the reason" contains "swiftc not found" "$out"
 }
 
-# --- Helpers: running the wrapper ----------------------------------------------
+# --- Helpers: running the wrapper ---------------------------------------------
 
 # run_capture <command...> : run command, store stdout/stderr/exit code in
 # OUT, ERR and RC without tripping set -e.
@@ -198,24 +219,31 @@ count_lines() {
   fi
 }
 
-# --- Tests: subcommand dispatch ------------------------------------------------
+# --- Tests: subcommand dispatch -----------------------------------------------
 
 test_dispatch() {
-  local wrapper="$PLUGIN_DIR/scripts/html-popup.sh"
-
-  run_capture "$wrapper"
+  local cmd
+  run_capture "$WRAPPER"
   assert_eq "no command exits 2" "2" "$RC"
   assert "no command prints usage" contains "usage:" "$ERR"
 
-  run_capture "$wrapper" frobnicate
+  run_capture "$WRAPPER" frobnicate
   assert_eq "unknown command exits 2" "2" "$RC"
-  assert "unknown command is named" contains "unknown command: frobnicate" "$ERR"
+  assert "unknown command is named" \
+    contains "unknown command: frobnicate" "$ERR"
 
-  run_capture "$wrapper" --help
+  run_capture "$WRAPPER" --help
   assert_eq "--help exits 0" "0" "$RC"
+
+  for cmd in check build; do
+    run_capture "$WRAPPER" "$cmd" extra
+    assert_eq "$cmd with an argument exits 2" "2" "$RC"
+    assert "$cmd names the extra argument" \
+      contains "unexpected argument: extra" "$ERR"
+  done
 }
 
-# --- Tests: build with hash cache ----------------------------------------------
+# --- Tests: build with hash cache ---------------------------------------------
 
 test_build_cache() {
   skip_unless_macos "build cache" || return 0
@@ -281,7 +309,7 @@ test_build_concurrent() {
   assert "the one file is the executable binary" test -x "$out1"
 }
 
-# --- Tests: check and build errors ---------------------------------------------
+# --- Tests: check and build errors --------------------------------------------
 
 test_missing_jq() {
   skip_unless_macos "missing jq" || return 0
@@ -380,13 +408,7 @@ test_real_build() {
   assert_eq "viewer without arguments exits 2" "2" "$rc"
 }
 
-# --- Helpers: running the real viewer ------------------------------------------
-
-FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
-VIEWER_BIN=""
-VIEWER_CACHE=""
-SESSION=""
-EVENTS=""
+# --- Helpers: running the real viewer -----------------------------------------
 
 # ensure_viewer : compile the real viewer once per run into VIEWER_BIN.
 ensure_viewer() {
@@ -447,7 +469,7 @@ event_field() {
   sed -n "${2}p" "$1" | jq -r "$3"
 }
 
-# --- Tests: viewer window and session files ------------------------------------
+# --- Tests: viewer window and session files -----------------------------------
 
 test_viewer_startup() {
   skip_unless_gui "viewer startup and timeout" || return 0
@@ -459,7 +481,8 @@ test_viewer_startup() {
   run_viewer "$FIXTURES/basic.html" --session "$session" --timeout 2 \
     --test-script "$FIXTURES/noop.js"
   assert_eq "--timeout exits 4" "4" "$RC"
-  assert_eq "ready is the first event" "ready" "$(event_field "$events" 1 .type)"
+  assert_eq "ready is the first event" "ready" \
+    "$(event_field "$events" 1 .type)"
   assert_eq "ready has seq 1" "1" "$(event_field "$events" 1 .seq)"
   assert_eq "timeout writes closed" "closed" "$(event_field "$events" 2 .type)"
   assert_eq "closed reason is timeout" "timeout" \
@@ -467,7 +490,7 @@ test_viewer_startup() {
   assert_eq "closed has seq 2" "2" "$(event_field "$events" 2 .seq)"
   assert_eq "exactly two events" "2" "$(count_lines "$events")"
   assert_eq "pid file holds the viewer pid" "$VIEWER_PID" \
-    "$(tr -d '[:space:]' <"$session/pid")"
+    "$(session_pid_of "$session")"
   assert "inbound FIFO exists" test -p "$session/in"
   assert "viewer.log exists" test -f "$session/viewer.log"
 }
@@ -525,7 +548,7 @@ test_viewer_errors() {
   assert "usage errors write no events" test ! -e "$session/events.jsonl"
 }
 
-# --- Tests: JS bridge (page -> agent) ------------------------------------------
+# --- Tests: JS bridge (page -> agent) -----------------------------------------
 
 # run_bridge <test script> [viewer args...] : run bridge.html in a fresh
 # session with the given test script; sets SESSION, EVENTS, RC.
@@ -545,9 +568,9 @@ test_bridge_send() {
   assert_eq "send then cancel exits 0" "0" "$RC"
   assert_eq "send writes ready, three messages and closed" "5" \
     "$(count_lines "$EVENTS")"
-  assert_eq "object message round-trips" \
-    '{"seq":2,"type":"message","data":{"action":"select","month":7,"nested":{"list":[1,"two"]}}}' \
-    "$(sed -n 2p "$EVENTS")"
+  local object='{"seq":2,"type":"message","data":'
+  object+='{"action":"select","month":7,"nested":{"list":[1,"two"]}}}'
+  assert_eq "object message round-trips" "$object" "$(sed -n 2p "$EVENTS")"
   assert_eq "string message round-trips" \
     '{"seq":3,"type":"message","data":"plain text"}' "$(sed -n 3p "$EVENTS")"
   assert_eq "float message keeps every digit" \
@@ -647,7 +670,7 @@ test_bridge_bad_data() {
     contains "no-such-data.json" "$(event_field "$EVENTS" 1 .message)"
 }
 
-# --- Tests: inbound FIFO (agent -> page) ---------------------------------------
+# --- Tests: inbound FIFO (agent -> page) --------------------------------------
 
 # wait_for_event <events file> <jq condition> <seconds> : poll until some
 # event matches the condition; non-zero when time runs out.
@@ -711,7 +734,8 @@ test_inbound_echo() {
     "$(jq -c 'select(.data.n == 1.5) | .data' "$EVENTS")"
 
   # Agent text reaches the page as data, never as page source.
-  tricky='{"s":"q\" \\ </script> \"); htmlPopup.send(\"pwned\"); (\"","u":"\u2028—✓"}'
+  tricky='{"s":"q\" \\ </script> \"); htmlPopup.send(\"pwned\"); (\"",'
+  tricky+='"u":"\u2028—✓"}'
   assert "tricky message is written" fifo_write "$SESSION/in" "$tricky"
   assert "tricky message comes back" \
     wait_for_event "$EVENTS" '.type == "message" and .data.u != null' 5
@@ -719,7 +743,8 @@ test_inbound_echo() {
     "$(jq -c 'select(.data.u != null) | .data' "$EVENTS")"
   assert "no injected message" not_contains '"data":"pwned"' "$(cat "$EVENTS")"
 
-  assert "close line is written" fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
+  assert "close line is written" \
+    fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
   finish_viewer
   assert_eq "close line exits 0" "0" "$RC"
   assert_eq "close line closes with reason agent" \
@@ -779,15 +804,13 @@ test_inbound_throwing_handler() {
   assert "message is written" fifo_write "$SESSION/in" '5'
   assert "handler after a throwing one still runs" \
     wait_for_event "$EVENTS" '.type == "message" and .data.got == 5' 5
-  assert "close line is written" fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
+  assert "close line is written" \
+    fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
   finish_viewer
   assert_eq "viewer closes normally" "0" "$RC"
 }
 
-# --- Helpers: running the wrapper against sessions -----------------------------
-
-WRAPPER="$PLUGIN_DIR/scripts/html-popup.sh"
-WRAP_TMP=""
+# --- Helpers: running the wrapper against sessions ----------------------------
 
 # wrap <test script|-> <args...> : run the wrapper with sessions under
 # WRAP_TMP and the cached real viewer; sets OUT, ERR, RC. "-" means no
@@ -830,9 +853,6 @@ dead_pid() {
   printf '%s' "$pid"
 }
 
-# The wrapper only treats processes named like the viewer as one.
-FAKE_VIEWER_NAME=html-popup-viewer-fake
-
 # live_pid : set LIVE_PID to a tracked idle process named like a viewer.
 live_pid() {
   exec -a "$FAKE_VIEWER_NAME" sleep 120 >/dev/null 2>&1 &
@@ -848,12 +868,7 @@ other_pid() {
   OTHER_PID=$!
 }
 
-# session_pid_of <dir> : the viewer pid recorded in a session dir.
-session_pid_of() {
-  tr -d '[:space:]' <"$1/pid"
-}
-
-# --- Tests: wrapper arguments and sessions without a viewer --------------------
+# --- Tests: wrapper arguments and sessions without a viewer -------------------
 
 test_wrapper_args() {
   new_tmpdir WRAP_TMP
@@ -930,7 +945,8 @@ test_wrapper_fake_sessions() {
   wrap - live wait "$session" --wait 0
   assert_eq "wait prints the new event" '{"seq":1,"type":"ready"}' "$OUT"
   assert_eq "wait with new events exits 0" "0" "$RC"
-  assert_eq "wait stores the cursor" "1" "$(tr -d '[:space:]' <"$session/cursor")"
+  assert_eq "wait stores the cursor" "1" \
+    "$(tr -d '[:space:]' <"$session/cursor")"
   wrap - live wait "$session" --wait 1
   assert_eq "wait with nothing new exits 4" "4" "$RC"
   assert "wait with nothing new prints nothing" test -z "$OUT"
@@ -1090,8 +1106,14 @@ test_wrapper_startup() {
   # shellcheck disable=SC2016 # stub shell code, expanded by the stub
   ev='printf "%s\n" "$1" >>"$DIR/events.jsonl"'
   local head="DIR=\$3; ev() { $ev; }"
+  local ready='{"seq":1,"type":"ready"}'
+  local error='{"seq":1,"type":"closed","reason":"error","message":"bad"}'
+  local user='{"seq":1,"type":"closed","reason":"user"}'
+  local answer='{"seq":1,"type":"answer","data":5}'
+  local answered='{"seq":2,"type":"closed","reason":"answer"}'
+  local timed_out='{"seq":1,"type":"closed","reason":"timeout"}'
 
-  stub_wrap "$head; ev '{\"seq\":1,\"type\":\"ready\"}'; exec -a \"\$0\" sleep 60" show "$page"
+  stub_wrap "$head; ev '$ready'; exec -a \"\$0\" sleep 60" show "$page"
   assert_eq "show with a ready viewer exits 0" "0" "$RC"
   session="$OUT"
   pid="$(session_pid_of "$session")"
@@ -1105,22 +1127,18 @@ test_wrapper_startup() {
   assert_eq "viewer dying without events exits 5" "5" "$RC"
   assert "log tail is shown" contains "stub viewer broke" "$ERR"
 
-  stub_wrap "$head; echo 'bad data' >&2; ev '{\"seq\":1,\"type\":\"closed\",\"reason\":\"error\",\"message\":\"bad\"}'" \
-    live start "$page"
+  stub_wrap "$head; echo 'bad data' >&2; ev '$error'" live start "$page"
   assert_eq "closed/error before ready exits 3" "3" "$RC"
   assert "error log tail is shown" contains "bad data" "$ERR"
 
-  stub_wrap "$head; ev '{\"seq\":1,\"type\":\"closed\",\"reason\":\"user\"}'" \
-    show "$page"
+  stub_wrap "$head; ev '$user'" show "$page"
   assert_eq "show of a window closed before ready exits 1" "1" "$RC"
 
-  stub_wrap "$head; ev '{\"seq\":1,\"type\":\"answer\",\"data\":5}'; ev '{\"seq\":2,\"type\":\"closed\",\"reason\":\"answer\"}'" \
-    ask "$page"
+  stub_wrap "$head; ev '$answer'; ev '$answered'" ask "$page"
   assert_eq "ask with an answer before ready exits 0" "0" "$RC"
   assert_eq "early answer is printed" "5" "$OUT"
 
-  stub_wrap "$head; ev '{\"seq\":1,\"type\":\"closed\",\"reason\":\"timeout\"}'" \
-    ask "$page"
+  stub_wrap "$head; ev '$timed_out'" ask "$page"
   assert_eq "ask with a window timeout before ready exits 1" "1" "$RC"
 
   start=$SECONDS
@@ -1137,7 +1155,7 @@ test_wrapper_startup() {
     sh -c "! kill -0 $(session_pid_of "$session") 2>/dev/null"
 }
 
-# --- Tests: wrapper with the real viewer ---------------------------------------
+# --- Tests: wrapper with the real viewer --------------------------------------
 
 test_wrapper_show() {
   skip_unless_gui "wrapper show and live start" || return 0
@@ -1298,8 +1316,12 @@ test_wrapper_caller_killed() {
   caller=$!
   set +m
   track_pid "$caller"
-  until session="$(find "$WRAP_TMP" -maxdepth 1 -name 'html-popup.*' | head -n 1)" &&
-    [[ -n "$session" ]] && grep -q '"ready"' "$session/events.jsonl" 2>/dev/null; do
+  until
+    session="$(find "$WRAP_TMP" -maxdepth 1 -name 'html-popup.*' |
+      head -n 1)" &&
+      [[ -n "$session" ]] &&
+      grep -q '"ready"' "$session/events.jsonl" 2>/dev/null
+  do
     ((tries-- > 0)) || break
     sleep 0.1
   done
@@ -1328,8 +1350,6 @@ test_wrapper_caller_killed() {
 }
 
 # --- Tests: starter template -------------------------------------------------
-
-TEMPLATE="$PLUGIN_DIR/assets/template.html"
 
 # no_relative_remote <file> : true unless a src/href uses a //host URL.
 no_relative_remote() {
@@ -1378,9 +1398,7 @@ test_template_headless() {
   assert_eq "template window closes" "0" "$RC"
 }
 
-# --- Tests: solar example --------------------------------------------------------
-
-SOLAR="$PLUGIN_DIR/examples/solar-2025"
+# --- Tests: solar example -----------------------------------------------------
 
 test_solar_static() {
   local data="$SOLAR/data.json"
@@ -1438,9 +1456,7 @@ test_solar_live() {
   assert "Done closes the window" contains '"reason":"answer"' "$events"
 }
 
-# --- Tests: SKILL.md ------------------------------------------------------------
-
-SKILL_MD="$PLUGIN_DIR/skills/html-popup/SKILL.md"
+# --- Tests: SKILL.md ----------------------------------------------------------
 
 # skill_frontmatter : print the lines between the opening and closing ---.
 skill_frontmatter() {
@@ -1469,10 +1485,11 @@ test_skill() {
   done <<<"$paths"
   # shellcheck disable=SC2016 # literal text the skill must contain
   assert "SKILL.md uses the wrapper via CLAUDE_PLUGIN_ROOT" \
-    contains '"${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"' "$(cat "$SKILL_MD")"
+    contains '"${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"' \
+    "$(cat "$SKILL_MD")"
 }
 
-# --- Runner --------------------------------------------------------------------
+# --- Runner -------------------------------------------------------------------
 
 main() {
   test_manifest
@@ -1515,7 +1532,8 @@ main() {
   test_solar_live
   test_skill
 
-  printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
+  printf '\nAll %d assertions passed (%d skipped).\n' \
+    "$PASS_COUNT" "$SKIP_COUNT"
 }
 
 main "$@"
