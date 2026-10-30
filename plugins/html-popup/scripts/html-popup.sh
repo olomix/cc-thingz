@@ -6,7 +6,8 @@
 #
 # Every window runs as a session: a temp dir holding `pid`, `in` (FIFO to
 # the page), `events.jsonl` (events from the page) and `viewer.log`. The
-# viewer runs detached, so a killed wrapper call never closes the window.
+# viewer is launched through LaunchServices as its own app, so a killed
+# wrapper call never closes the window.
 #
 # Exit codes: 0 ok / answered; 1 window closed (no answer, session over,
 # window --timeout reached); 2 usage error, missing dependency, build
@@ -17,6 +18,7 @@
 #   CLAUDE_PLUGIN_DATA      cache dir (default: ~/Library/Caches/html-popup)
 #   HTML_POPUP_SWIFTC       compiler to use instead of xcrun swiftc
 #                           (tests use a fake)
+#   HTML_POPUP_OPEN         launcher to use instead of open (tests use a fake)
 #   HTML_POPUP_TEST_SCRIPT  JS file run after page load; headless test mode
 set -euo pipefail
 
@@ -34,8 +36,9 @@ DEFAULT_WAIT=100
 READY_WAIT=10
 CLOSE_WAIT=5
 POLL=0.2
-# Short: a blocked FIFO write or a fresh viewer's exec take milliseconds.
+# Short: a blocked FIFO write takes milliseconds.
 FIFO_POLL=0.05
+OPEN="${HTML_POPUP_OPEN:-open}"
 
 # xcrun picks the Xcode toolchain with the AppKit/WebKit SDK, not whatever
 # swiftc (e.g. an OSS toolchain) comes first in PATH.
@@ -222,10 +225,30 @@ session_pid() {
   tr -d '[:space:]' 2>/dev/null <"$1/pid" || true
 }
 
-# require_session <dir> : exit 2 unless dir looks like a session dir.
+# require_session <dir> : exit 2 unless dir looks like a session dir. One
+# with ready_by but no pid yet is still starting.
 require_session() {
   [[ -n "$1" ]] || die "missing session DIR"
-  [[ -f "$1/pid" ]] || die "not an html-popup session: $1"
+  [[ -f "$1/pid" || -f "$1/ready_by" ]] || die "not an html-popup session: $1"
+}
+
+# find_viewer <dir> : print the session's viewer pid, or nothing while it is
+# still starting. open does not report the pid: the viewer writes DIR/pid,
+# else a live viewer found by its --session argument is recorded there.
+find_viewer() {
+  local pid
+  pid="$(session_pid "$1")"
+  if [[ "$pid" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$pid"
+    return 0
+  fi
+  for pid in $(pgrep -f -- "--session $1" 2>/dev/null); do
+    viewer_alive "$1" "$pid" || continue
+    printf '%s\n' "$pid" >"$1/pid.tmp.$$"
+    mv -f "$1/pid.tmp.$$" "$1/pid"
+    printf '%s' "$pid"
+    return 0
+  done
 }
 
 # complete_events <dir> : print the newline-terminated lines of events.jsonl
@@ -370,20 +393,6 @@ await_forced_close() {
   done
 }
 
-# await_exec <dir> <pid> : wait until the freshly spawned child has exec'd
-# the viewer (or died), so later checks never see the bash child instead.
-await_exec() {
-  deadline_start "$CLOSE_WAIT"
-  until viewer_alive "$1" "$2"; do
-    pid_alive "$2" || return 0
-    if deadline_passed; then
-      kill -9 "$2" 2>/dev/null || true
-      die "viewer did not start in ${CLOSE_WAIT}s; see $1/viewer.log" 5
-    fi
-    sleep "$FIFO_POLL"
-  done
-}
-
 # ready_overdue <dir> : true when the page missed the ready deadline set at
 # start; kept in DIR/ready_by so it also holds for ask --resume.
 ready_overdue() {
@@ -403,6 +412,30 @@ remove_stale_sessions() {
     -mtime +0 2>/dev/null)
 }
 
+# abandon_session <dir> <reason> [message] : end a session whose viewer may
+# still be starting. The viewer writes DIR/pid before it checks
+# DIR/abandoned, so either it exits on its own or find_viewer sees it here.
+abandon_session() {
+  : >"$1/abandoned"
+  terminate_viewer "$1" "$(find_viewer "$1")" "${@:2}"
+}
+
+# abandon_not_ready <dir> : give up on a page that missed the ready deadline.
+abandon_not_ready() {
+  abandon_session "$1" error "page not ready after ${READY_WAIT}s"
+  die "page not ready after ${READY_WAIT}s; see $1/viewer.log" 3
+}
+
+# abs_path <path> : the path made absolute; an app launched through
+# LaunchServices starts in / without our environment.
+abs_path() {
+  if [[ "$1" == /* ]]; then
+    printf '%s' "$1"
+  else
+    printf '%s/%s' "$PWD" "$1"
+  fi
+}
+
 # startup_failed <code> : report a viewer that ended before ready, then exit.
 startup_failed() {
   printf 'html-popup: viewer exited before the page was ready; log:\n' >&2
@@ -416,14 +449,18 @@ startup_failed() {
 # With START_BUDGET set (the caller's --wait), returns once that runs out
 # even if the page is still loading.
 start_session() {
-  local page="" data="" bin pid closed ready_wait="$READY_WAIT" budgeted=0
-  local -a viewer_args=()
+  local page="" data="" bundle pid="" closed ready_wait="$READY_WAIT" out
+  local budgeted=0
+  local -a viewer_args=() open_args=(-n)
   EARLY_CLOSE=0
   while (($# > 0)); do
     case "$1" in
       --data)
         need_value "$@"
         data="$2"
+        viewer_args+=("$1" "$(abs_path "$2")")
+        shift 2
+        continue
         ;;
       --title) need_value "$@" ;;
       --size)
@@ -460,24 +497,21 @@ start_session() {
     jq empty "$data" >/dev/null 2>&1 || die "data is not valid JSON: $data" 3
   fi
   if [[ -n "${HTML_POPUP_TEST_SCRIPT:-}" ]]; then
-    viewer_args+=(--test-script "$HTML_POPUP_TEST_SCRIPT")
+    viewer_args+=(--test-script "$(abs_path "$HTML_POPUP_TEST_SCRIPT")")
+    # Headless test windows must not take focus from the user's app.
+    open_args+=(-g)
   fi
 
-  bin="$(build_viewer)" || exit 2
-  bin="$(viewer_exec "$bin")"
-  SESSION_DIR="$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")"
+  bundle="$(build_viewer)" || exit 2
+  SESSION_DIR="$(abs_path "$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")")"
   printf '%s\n' "$(($(date +%s) + READY_WAIT))" >"$SESSION_DIR/ready_by"
 
-  # Double fork: the subshell exits at once, so the viewer is reparented to
-  # launchd and a caller that kills our process tree cannot reach it.
-  (
-    "$bin" "$page" --session "$SESSION_DIR" \
-      "${viewer_args[@]+"${viewer_args[@]}"}" \
-      </dev/null >>"$SESSION_DIR/viewer.log" 2>&1 &
-    printf '%s\n' "$!" >"$SESSION_DIR/pid"
-  )
-  pid="$(session_pid "$SESSION_DIR")"
-  await_exec "$SESSION_DIR" "$pid"
+  # -n: each popup is its own app instance. open exits 0 even when the
+  # viewer fails at once; the ready wait below catches that.
+  out="$("$OPEN" "${open_args[@]}" -a "$bundle" --stdout /dev/null \
+    --stderr "$SESSION_DIR/viewer.log" --args "$(abs_path "$page")" \
+    --session "$SESSION_DIR" "${viewer_args[@]+"${viewer_args[@]}"}" \
+    2>&1 </dev/null)" || die "cannot launch the viewer: $out"
 
   if [[ -n "${START_BUDGET:-}" ]] &&
     ((START_BUDGET - SECONDS < READY_WAIT)); then
@@ -492,7 +526,8 @@ start_session() {
       EARLY_CLOSE=1
       return 0
     fi
-    if ! viewer_alive "$SESSION_DIR" "$pid"; then
+    [[ -n "$pid" ]] || pid="$(find_viewer "$SESSION_DIR")"
+    if [[ -n "$pid" ]] && ! viewer_alive "$SESSION_DIR" "$pid"; then
       has_event "$SESSION_DIR" ready closed ||
         await_forced_close "$SESSION_DIR" || startup_failed 5
       continue
@@ -500,9 +535,7 @@ start_session() {
     if deadline_passed; then
       # The caller's wait ran out: it reports the open session (exit 4).
       ((budgeted == 0)) || return 0
-      terminate_viewer "$SESSION_DIR" "$pid" error \
-        "page not ready after ${READY_WAIT}s"
-      die "page not ready after ${READY_WAIT}s; see $SESSION_DIR/viewer.log" 3
+      abandon_not_ready "$SESSION_DIR"
     fi
     sleep "$POLL"
   done
@@ -517,8 +550,7 @@ cmd_show() {
 
 # wait_answer <dir> <wait> : print the answer and exit per the ask contract.
 wait_answer() {
-  local dir="$1" event type pid message
-  pid="$(session_pid "$dir")"
+  local dir="$1" event type pid="" message
   deadline_start "$2"
   while :; do
     event="$(first_event "$dir" answer closed)"
@@ -537,15 +569,13 @@ wait_answer() {
         *) die "window closed without an answer" 1 ;;
       esac
     fi
-    if ! viewer_alive "$dir" "$pid"; then
+    [[ -n "$pid" ]] || pid="$(find_viewer "$dir")"
+    if [[ -n "$pid" ]] && ! viewer_alive "$dir" "$pid"; then
       has_event "$dir" answer closed && continue
       await_forced_close "$dir" && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
-    if ready_overdue "$dir"; then
-      terminate_viewer "$dir" "$pid" error "page not ready after ${READY_WAIT}s"
-      die "page not ready after ${READY_WAIT}s; see $dir/viewer.log" 3
-    fi
+    ready_overdue "$dir" && abandon_not_ready "$dir"
     if deadline_passed; then
       printf 'html-popup: still waiting; resume with: %s\n' \
         "html-popup.sh ask --resume $dir" >&2
@@ -661,7 +691,7 @@ write_inbound() {
 
 # session_over <dir> : true when the window has closed or its viewer is gone.
 session_over() {
-  has_event "$1" closed || ! viewer_alive "$1" "$(session_pid "$1")"
+  has_event "$1" closed || ! viewer_alive "$1" "$(find_viewer "$1")"
 }
 
 cmd_live_send() {
@@ -679,7 +709,7 @@ cmd_live_send() {
 }
 
 cmd_live_wait() {
-  local dir="${1:-}" wait="$DEFAULT_WAIT" cursor batch last pid
+  local dir="${1:-}" wait="$DEFAULT_WAIT" cursor batch last pid=""
   (($# > 0)) && shift
   while (($# > 0)); do
     case "$1" in
@@ -693,7 +723,6 @@ cmd_live_wait() {
   done
   require_jq
   require_session "$dir"
-  pid="$(session_pid "$dir")"
   cursor="$(tr -d '[:space:]' 2>/dev/null <"$dir/cursor" || true)"
   [[ "$cursor" =~ ^[0-9]+$ ]] || cursor=0
 
@@ -710,13 +739,16 @@ cmd_live_wait() {
       fi
       exit 0
     fi
-    if has_event "$dir" closed || ! viewer_alive "$dir" "$pid"; then
+    [[ -n "$pid" ]] || pid="$(find_viewer "$dir")"
+    if has_event "$dir" closed ||
+      { [[ -n "$pid" ]] && ! viewer_alive "$dir" "$pid"; }; then
       # The last events may have landed after the batch was read.
       [[ -n "$(new_events "$dir" "$cursor")" ]] && continue
       has_event "$dir" closed && exit 1
       await_forced_close "$dir" && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
+    [[ -n "$pid" ]] || ! ready_overdue "$dir" || abandon_not_ready "$dir"
     deadline_passed && exit 4
     sleep "$POLL"
   done
@@ -728,7 +760,11 @@ cmd_live_close() {
   require_jq
   require_session "$dir"
   has_event "$dir" closed && return 0
-  pid="$(session_pid "$dir")"
+  pid="$(find_viewer "$dir")"
+  if [[ -z "$pid" ]]; then
+    abandon_session "$dir" agent
+    return 0
+  fi
   if ! viewer_alive "$dir" "$pid"; then
     # Finish a forced close whose owner died before appending closed.
     [[ ! -L "$dir/close.lock.1" ]] || terminate_viewer "$dir" "$pid" agent

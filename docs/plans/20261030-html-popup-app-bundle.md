@@ -413,31 +413,40 @@ stub writes its pid unless built with `FAKE_SWIFTC_NO_PID=1`.
 - Create: `tests/fixtures/fake-open.sh`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] wrapper: launch with `${HTML_POPUP_OPEN:-open} -n [-g] -a …
+- [x] wrapper: launch with `${HTML_POPUP_OPEN:-open} -n [-g] -a …
       --stdout /dev/null --stderr LOG --args …` using absolute paths; drop
       the double fork
-- [ ] wrapper: pid handshake as in Technical Details (find the viewer by
+- [x] wrapper: pid handshake as in Technical Details (find the viewer by
       `--session DIR`, bounded by the ready budget, "still starting"
       sessions accepted by `require_session`, `DIR/abandoned` on give-up)
-- [ ] viewer: `.regular` outside test mode, `.accessory` in test mode;
+- [x] viewer: `.regular` outside test mode, `.accessory` in test mode;
       remove the floating fallback; exit early on `DIR/abandoned` (after
       session setup and again after the page/data access); `isRestorable
       = false`
-- [ ] update stale comments in the viewer and the wrapper header
+- [x] update stale comments in the viewer and the wrapper header
       (`HTML_POPUP_OPEN`, no double fork)
-- [ ] add `tests/fixtures/fake-open.sh`; point every fake-viewer test at
+- [x] add `tests/fixtures/fake-open.sh`; point every fake-viewer test at
       it via `HTML_POPUP_OPEN`
-- [ ] run `shellcheck`; viewer compiles with no warnings
-- [ ] write tests: show / ask / live round trip with the real bundle
+- [x] run `shellcheck`; viewer compiles with no warnings
+- [x] write tests: show / ask / live round trip with the real bundle
       (GUI-gated); the viewer's parent is launchd; a killed wrapper leaves
       the window running; relative page/`--data` paths run from another
       cwd still load; a GUI test run leaves the frontmost app unchanged
-- [ ] update and write tests for errors: `open` failing → exit 2 with its
+- [x] update and write tests for errors: `open` failing → exit 2 with its
       message; "slow to exec" with `ask --wait 1` → exit 4 and
       `ask --resume` works on a session with no pid yet; "dies without
       events" → exit 5; no viewer before the ready deadline → exit 3 and a
       late viewer exits without a window
-- [ ] run tests — must pass before task 5
+- [x] run tests — must pass before task 5
+
+Result: the wrapper launches the bundle with `open` and no longer forks or
+waits for exec (`await_exec` is gone). `find_viewer` resolves the pid
+lazily (DIR/pid, else `pgrep -f -- "--session DIR"` checked by
+`viewer_alive`); a still-starting session is accepted everywhere: `ask
+--resume` and `live wait` exit 4, `live close` abandons it with reason
+`agent`, and any wait past the ready deadline with no viewer abandons it
+(exit 3). A late viewer exits 3 without events. `fake-open.sh` also
+records its arguments (`FAKE_OPEN_ARGS`) and can fail (`FAKE_OPEN_FAIL`).
 
 ### Task 5: Verify acceptance criteria
 - [ ] verify the bundle is built locally, launched with `open -n -a`, uses

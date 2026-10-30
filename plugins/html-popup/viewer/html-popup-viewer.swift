@@ -3,9 +3,10 @@
 // Usage: html-popup-viewer PAGE.html --session DIR [--data FILE]
 //          [--title TEXT] [--size WxH] [--timeout SEC] [--test-script FILE]
 //
-// Called only by scripts/html-popup.sh, which compiles this file on first
-// use. Session files in DIR: `pid`, `in` (FIFO), `events.jsonl` (one JSON
-// event per line), `viewer.log`.
+// Called only by scripts/html-popup.sh, which builds this file into the
+// "HTML Popup" app on first use and launches it with open(1). Session files
+// in DIR: `pid`, `in` (FIFO), `events.jsonl` (one JSON event per line),
+// `viewer.log`, and `abandoned` once the wrapper gave up waiting for us.
 //
 // Each line written to `in` is a JSON value passed to the page's
 // `htmlPopup.onMessage` handlers; `{"htmlPopup":"close"}` closes the window.
@@ -196,7 +197,7 @@ func startSession(_ dir: String) throws -> (events: EventLog, inbound: Int32) {
     guard inbound >= 0 else {
         throw ViewerError(message: "cannot open \(fifo): \(errnoText())")
     }
-    // For standalone runs; the wrapper writes the same pid right after launch.
+    // open(1) does not report our pid, so the wrapper reads it from here.
     try "\(getpid())\n".write(
         toFile: dir + "/pid", atomically: true, encoding: .utf8)
     return (try EventLog(path: dir + "/events.jsonl"), inbound)
@@ -374,9 +375,6 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
             window.alphaValue = 0
             window.orderFrontRegardless()
         } else {
-            // A detached accessory process may be denied activation (macOS
-            // 14+), so float until the window first becomes key.
-            window.level = .floating
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             window.makeFirstResponder(web)
@@ -408,6 +406,8 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         window.titleVisibility = .hidden
         window.title = options.title ?? pageURL.lastPathComponent
         window.isReleasedWhenClosed = false
+        // A regular app with a fixed bundle id would get saved-state restore.
+        window.isRestorable = false
         window.delegate = self
         return window
     }
@@ -426,7 +426,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return web
     }
 
-    // An unbundled binary has no menu; without one, inputs lose the standard
+    // The app has no nib, so no menu; without one, inputs lose the standard
     // Edit shortcuts and Cmd-W does nothing.
     private func makeMainMenu() -> NSMenu {
         func item(_ title: String, _ action: Selector, _ key: String,
@@ -445,7 +445,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
 
         let main = NSMenu()
-        main.addItem(submenu("html-popup", [
+        main.addItem(submenu("HTML Popup", [
             item("Quit", #selector(NSApplication.terminate(_:)), "q"),
         ]))
         main.addItem(submenu("Edit", [
@@ -462,21 +462,6 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
         ]))
         return main
-    }
-
-    // Drop the launch-time floating level once the window really has focus:
-    // the user wants a regular window. An inactive app can report key early.
-    func windowDidBecomeKey(_ notification: Notification) {
-        dropLaunchFloatIfFocused()
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        dropLaunchFloatIfFocused()
-    }
-
-    private func dropLaunchFloatIfFocused() {
-        guard NSApp.isActive, let window, window.isKeyWindow else { return }
-        window.level = .normal
     }
 
     // The close button and Cmd-W both arrive here.
@@ -699,6 +684,16 @@ do {
 }
 let events = session.events
 
+// The wrapper already reported this session as failed and wrote its closed
+// event; a late viewer must not open an untracked window.
+func exitIfAbandoned() {
+    if FileManager.default.fileExists(atPath: options.session + "/abandoned") {
+        log("session abandoned by the wrapper; exiting")
+        exit(3)
+    }
+}
+exitIfAbandoned()
+
 let pageURL = URL(fileURLWithPath: options.page).standardizedFileURL
 if !FileManager.default.isReadableFile(atPath: pageURL.path) {
     events.close(
@@ -714,10 +709,13 @@ if let dataPath = options.data {
     }
 }
 
+// A macOS access prompt for protected folders can block the reads above.
+exitIfAbandoned()
+
 let app = NSApplication.shared
-// No app bundle: run as an accessory so the window can show and take focus
-// without a Dock icon.
-app.setActivationPolicy(.accessory)
+// Focus on launch needs a regular app; headless test windows stay out of
+// the Dock and Cmd-Tab.
+app.setActivationPolicy(options.testScript != nil ? .accessory : .regular)
 let viewer = Viewer(
     options: options, pageURL: pageURL, dataJSON: dataJSON, events: events)
 app.delegate = viewer

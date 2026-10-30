@@ -14,6 +14,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/html-popup"
 MARKETPLACE="$REPO_ROOT/.claude-plugin/marketplace.json"
 FAKE_SWIFTC="$SCRIPT_DIR/fixtures/fake-swiftc.sh"
+FAKE_OPEN="$SCRIPT_DIR/fixtures/fake-open.sh"
 FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
 WRAPPER="$PLUGIN_DIR/scripts/html-popup.sh"
 TEMPLATE="$PLUGIN_DIR/assets/template.html"
@@ -52,6 +53,8 @@ cleanup() {
       pid="$(session_pid_of "${pidfile%/pid}")"
       [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
     done
+    # Viewers that never wrote a pid file.
+    pkill -f -- "--session $dir/" 2>/dev/null || true
   done
   for dir in "${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}"; do
     rm -rf "$dir"
@@ -675,6 +678,22 @@ test_viewer_errors() {
   assert "usage errors write no events" test ! -e "$session/events.jsonl"
 }
 
+# A viewer that starts after the wrapper gave up must not open a window.
+test_viewer_abandoned() {
+  skip_unless_gui "late viewer of an abandoned session" || return 0
+  ensure_viewer
+  local session
+  new_tmpdir session
+  : >"$session/abandoned"
+  run_viewer "$FIXTURES/basic.html" --session "$session" --timeout 5 \
+    --test-script "$FIXTURES/noop.js"
+  assert_eq "late viewer exits 3" "3" "$RC"
+  assert_eq "late viewer writes no events" "0" \
+    "$(count_lines "$session/events.jsonl")"
+  assert "late viewer logs why it exits" \
+    contains "abandoned" "$(cat "$session/viewer.log")"
+}
+
 # --- Tests: JS bridge (page -> agent) -----------------------------------------
 
 # run_bridge <test script> [viewer args...] : run bridge.html in a fresh
@@ -953,19 +972,21 @@ test_inbound_throwing_handler() {
 # --- Helpers: running the wrapper against sessions ----------------------------
 
 # wrap <test script|-> <args...> : run the wrapper with sessions under
-# WRAP_TMP and the cached real viewer; sets OUT, ERR, RC. "-" means no
-# test script and a fake compiler with its own cache (only for calls that
-# never open a window), so results do not depend on earlier GUI tests.
+# WRAP_TMP and the cached real viewer launched by real open; sets OUT, ERR,
+# RC. "-" means no test script and a fake compiler and launcher with their
+# own cache (only for calls that never open a window), so results do not
+# depend on earlier GUI tests.
 wrap() {
   local script="$1"
   shift
   if [[ "$script" == - ]]; then
     run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$WRAP_TMP/cache" \
-      HTML_POPUP_SWIFTC="$FAKE_SWIFTC" HTML_POPUP_TEST_SCRIPT= "$WRAPPER" "$@"
+      HTML_POPUP_SWIFTC="$FAKE_SWIFTC" HTML_POPUP_OPEN="$FAKE_OPEN" \
+      HTML_POPUP_TEST_SCRIPT= "$WRAPPER" "$@"
   else
     run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
-      HTML_POPUP_SWIFTC= HTML_POPUP_TEST_SCRIPT="$FIXTURES/$script" \
-      "$WRAPPER" "$@"
+      HTML_POPUP_SWIFTC= HTML_POPUP_OPEN= \
+      HTML_POPUP_TEST_SCRIPT="$FIXTURES/$script" "$WRAPPER" "$@"
   fi
 }
 
@@ -1731,16 +1752,19 @@ test_wrapper_ask_budget() {
   assert_eq "never-ready resume writes closed/error" "error" \
     "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
 
-  # --wait may run out before the child has exec'd the viewer.
-  FAKE_SWIFTC_EXEC_DELAY=2 stub_wrap 'idle 60' ask "$page" --wait 1
+  # --wait may run out before the viewer has started and written its pid.
+  FAKE_SWIFTC_EXEC_DELAY=2 \
+    stub_wrap "$head; ev '$ready'; ev '$answer'; ev '$answered'" \
+    ask "$page" --wait 1
   assert_eq "ask --wait 1 on a viewer slow to exec exits 4, not 5" "4" "$RC"
   assert "slow exec gets a resume hint" contains "ask --resume" "$ERR"
   session="${ERR##*--resume }"
-  pid="$(session_pid_of "$session")"
-  track_pid "$pid"
+  assert "slow viewer has no pid yet" test ! -e "$session/pid"
   wrap - ask --resume "$session" --wait 0
-  assert_eq "resume after a slow exec exits 4" "4" "$RC"
-  kill "$pid"
+  assert_eq "resume of a still-starting session exits 4" "4" "$RC"
+  wrap - ask --resume "$session" --wait 10
+  assert_eq "resume picks up the late viewer's answer" "0" "$RC"
+  assert_eq "late viewer's answer is printed" "5" "$OUT"
 }
 
 # A forced close whose owner was killed before appending closed is finished
@@ -1849,7 +1873,8 @@ EOF
 }
 
 # stub_wrap <stub body> <args...> : run the wrapper with a fake viewer whose
-# shell body is given (args: PAGE --session DIR ...); sets OUT, ERR, RC.
+# shell body is given (args: PAGE --session DIR ...), launched by the fake
+# open; sets OUT, ERR, RC.
 stub_wrap() {
   local body="$1" cache
   shift
@@ -1857,7 +1882,7 @@ stub_wrap() {
   cache="$(mktemp -d "$WRAP_TMP/cache.XXXXXX")"
   run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$cache" \
     HTML_POPUP_SWIFTC="$FAKE_SWIFTC" FAKE_SWIFTC_BODY="$body" \
-    HTML_POPUP_TEST_SCRIPT= "$WRAPPER" "$@"
+    HTML_POPUP_OPEN="$FAKE_OPEN" HTML_POPUP_TEST_SCRIPT= "$WRAPPER" "$@"
 }
 
 # Startup paths of the wrapper, driven by scripted fake viewers.
@@ -1925,6 +1950,104 @@ test_wrapper_startup() {
   session="$(dirname "$session")"
   assert "never-ready viewer is killed" \
     sh -c "! kill -0 $(session_pid_of "$session") 2>/dev/null"
+
+  FAKE_SWIFTC_NO_PID=1 stub_wrap "$head; ev '$ready'; idle 60" show "$page"
+  assert_eq "show with a viewer that writes no pid exits 0" "0" "$RC"
+  session="$OUT"
+  wrap - live wait "$session" --wait 0
+  wrap - live wait "$session" --wait 0
+  assert_eq "a viewer without a pid file is still open" "4" "$RC"
+  pid="$(session_pid_of "$session")"
+  track_pid "$pid"
+  assert "the found viewer's pid is recorded" \
+    contains html-popup-viewer- "$(ps -ww -p "$pid" -o comm=)"
+  kill "$pid"
+
+  FAKE_OPEN_FAIL="LSOpenURLsWithRole() failed" stub_wrap 'exit 0' \
+    show "$page"
+  assert_eq "open failing exits 2" "2" "$RC"
+  assert "open's message is shown" contains "LSOpenURLsWithRole" "$ERR"
+
+  # A launcher that starts nothing: no viewer is ever seen.
+  new_tmpdir WRAP_TMP
+  start=$SECONDS
+  run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$WRAP_TMP/cache" \
+    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" HTML_POPUP_OPEN=true \
+    HTML_POPUP_TEST_SCRIPT= "$WRAPPER" show "$page"
+  assert_eq "no viewer before the ready deadline exits 3" "3" "$RC"
+  assert "missing viewer wait is bounded" test $((SECONDS - start)) -le 15
+  session="$(find "$WRAP_TMP" -maxdepth 2 -name abandoned | head -n 1)"
+  assert "missing viewer abandons the session" test -n "$session"
+  session="$(dirname "$session")"
+  assert_eq "abandoned session gets closed/error" "error" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
+}
+
+# Launch arguments as the fake open receives them.
+test_wrapper_launch_args() {
+  skip_unless_macos "wrapper launch arguments" || return 0
+  new_tmpdir WRAP_TMP
+  local args="$WRAP_TMP/open-args" session cwd nl=$'\n'
+  # shellcheck disable=SC2016 # stub shell code, expanded by the stub
+  local ready='printf "%s\n" "{\"seq\":1,\"type\":\"ready\"}" >>"$3/events.jsonl"'
+  cp "$FIXTURES/basic.html" "$WRAP_TMP/rel.html"
+  printf '{"a":1}\n' >"$WRAP_TMP/rel.json"
+  printf '\n' >"$WRAP_TMP/rel.js"
+
+  cd "$WRAP_TMP"
+  cwd="$PWD"
+  run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$WRAP_TMP/cache" \
+    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" FAKE_SWIFTC_BODY="$ready; idle 60" \
+    HTML_POPUP_OPEN="$FAKE_OPEN" FAKE_OPEN_ARGS="$args" \
+    HTML_POPUP_TEST_SCRIPT=rel.js "$WRAPPER" show rel.html --data rel.json
+  cd - >/dev/null
+  assert_eq "show with relative paths exits 0" "0" "$RC"
+  session="$OUT"
+  track_pid "$(session_pid_of "$session")"
+  kill "$(session_pid_of "$session")"
+  assert_eq "every popup is a new instance" "-n" "$(head -n 1 "$args")"
+  assert "test mode launches in the background" \
+    contains "$nl-g$nl" "$(cat "$args")"
+  assert "page path is absolute" contains "$nl$cwd/rel.html$nl" \
+    "$(cat "$args")"
+  assert "--data path is absolute" \
+    contains "$nl--data$nl$cwd/rel.json$nl" "$(cat "$args")"
+  assert "--test-script path is absolute" \
+    contains "$nl--test-script$nl$cwd/rel.js" "$(cat "$args")"
+  assert "viewer stderr goes to the session log" \
+    contains "$nl--stderr$nl$session/viewer.log$nl" "$(cat "$args")"
+
+  : >"$args"
+  FAKE_OPEN_ARGS="$args" stub_wrap "$ready; idle 60" show "$WRAP_TMP/rel.html"
+  assert_eq "show outside test mode exits 0" "0" "$RC"
+  kill "$(session_pid_of "$OUT")"
+  assert "normal mode launches in the foreground" \
+    not_contains "$nl-g$nl" "$(cat "$args")"
+}
+
+# A session whose viewer has not started yet: ready_by but no pid.
+test_wrapper_starting_session() {
+  skip_unless_macos "still-starting session" || return 0
+  new_tmpdir WRAP_TMP
+  local session
+  session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
+  printf '%s\n' "$(($(date +%s) + 60))" >"$session/ready_by"
+
+  wrap - live wait "$session" --wait 0
+  assert_eq "live wait on a starting session exits 4" "4" "$RC"
+  wrap - ask --resume "$session" --wait 0
+  assert_eq "ask --resume on a starting session exits 4" "4" "$RC"
+  wrap - live close "$session"
+  assert_eq "live close of a starting session exits 0" "0" "$RC"
+  assert "close abandons the starting session" test -e "$session/abandoned"
+  assert_eq "close appends closed/agent" "agent" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
+
+  session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
+  printf '%s\n' "$(($(date +%s) - 1))" >"$session/ready_by"
+  wrap - ask --resume "$session" --wait 5
+  assert_eq "resume past the deadline with no viewer exits 3" "3" "$RC"
+  assert "it abandons the session" test -e "$session/abandoned"
 }
 
 # --- Tests: wrapper with the real viewer --------------------------------------
@@ -1960,6 +2083,42 @@ test_wrapper_show() {
     --timeout 30
   assert_eq "show with empty --data exits 3" "3" "$RC"
   assert "empty --data is explained" contains "not valid JSON" "$ERR"
+}
+
+# The real viewer launched by open: relative paths from another cwd still
+# load, and a test-mode window leaves the user's frontmost app alone.
+test_wrapper_open_launch() {
+  skip_unless_gui "wrapper launch through open" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local front session pid
+  cp "$FIXTURES/bridge.html" "$FIXTURES/data.json" "$FIXTURES/data.js" \
+    "$WRAP_TMP/"
+
+  cd "$WRAP_TMP"
+  run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
+    HTML_POPUP_SWIFTC= HTML_POPUP_OPEN= HTML_POPUP_TEST_SCRIPT=data.js \
+    "$WRAPPER" ask bridge.html --data data.json --timeout 20
+  cd - >/dev/null
+  assert_eq "relative paths: the page cancels after echoing" "1" "$RC"
+  assert_eq "relative --data reaches the page" \
+    "$(jq -cS . "$FIXTURES/data.json")" \
+    "$(cat "$WRAP_TMP"/html-popup.*/events.jsonl |
+      jq -cS 'select(.type == "message") | .data')"
+
+  front="$(lsappinfo front)"
+  wrap noop.js show "$FIXTURES/basic.html" --timeout 30
+  assert_eq "test-mode show exits 0" "0" "$RC"
+  session="$OUT"
+  pid="$(session_pid_of "$session")"
+  assert_eq "test-mode window leaves the frontmost app" "$front" \
+    "$(lsappinfo front)"
+  assert "viewer runs from the app bundle" \
+    test "$(ps -ww -p "$pid" -o comm=)" -ef "$VIEWER_BIN"
+  assert_eq "viewer's parent is launchd" "1" \
+    "$(ps -o ppid= -p "$pid" | tr -d ' ')"
+  wrap - live close "$session"
+  assert_eq "launched window closes" "0" "$RC"
 }
 
 test_wrapper_ask() {
@@ -2301,6 +2460,7 @@ main() {
   test_real_build
   test_viewer_startup
   test_viewer_errors
+  test_viewer_abandoned
   test_bridge_send
   test_bridge_answer
   test_bridge_data
@@ -2332,7 +2492,10 @@ main() {
   test_wrapper_close_owner_killed
   test_wrapper_close_lock_takeover_race
   test_wrapper_startup
+  test_wrapper_launch_args
+  test_wrapper_starting_session
   test_wrapper_show
+  test_wrapper_open_launch
   test_wrapper_ask
   test_wrapper_live
   test_wrapper_live_races
