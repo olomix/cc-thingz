@@ -7,6 +7,9 @@
 // use. Session files in DIR: `pid`, `in` (FIFO), `events.jsonl` (one JSON
 // event per line), `viewer.log`.
 //
+// Each line written to `in` is a JSON value passed to the page's
+// `htmlPopup.onMessage` handlers; `{"htmlPopup":"close"}` closes the window.
+//
 // The page talks back through `window.htmlPopup` (see `bridgeSource`).
 //
 // Exit codes: 0 normal close, 2 usage error, 3 page or data invalid,
@@ -166,8 +169,13 @@ final class EventLog {
     }
 }
 
+struct Session {
+    let events: EventLog
+    let inbound: Int32
+}
+
 // Prepare the session dir: own session, log, FIFO, pid file, events.
-func startSession(_ dir: String) throws -> EventLog {
+func startSession(_ dir: String) throws -> Session {
     // Leave the caller's process group so a killed agent shell or a Ctrl-C
     // in it does not take the window down. Fails harmlessly if we already
     // lead a group.
@@ -185,8 +193,62 @@ func startSession(_ dir: String) throws -> EventLog {
     if mkfifo(fifo, 0o600) != 0 && errno != EEXIST {
         throw UsageError.message("cannot create \(fifo): \(errnoText())")
     }
+    // Read-write, so the open does not block waiting for a writer and reads
+    // never hit EOF when a writer goes away.
+    let inbound = open(fifo, O_RDWR)
+    guard inbound >= 0 else {
+        throw UsageError.message("cannot open \(fifo): \(errnoText())")
+    }
     try "\(getpid())\n".write(toFile: dir + "/pid", atomically: true, encoding: .utf8)
-    return try EventLog(path: dir + "/events.jsonl")
+    return Session(events: try EventLog(path: dir + "/events.jsonl"), inbound: inbound)
+}
+
+// Reads DIR/in on a background thread and hands each complete line to
+// `deliver` on the main thread. Writes over PIPE_BUF are not atomic, so a
+// line can span several reads and is buffered until its newline arrives.
+func startInboundReader(fd: Int32, deliver: @escaping (Data) -> Void) {
+    let thread = Thread {
+        var pending = Data()
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = read(fd, &chunk, chunk.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else {
+                log("inbound read stopped: \(count < 0 ? errnoText() : "EOF")")
+                return
+            }
+            pending.append(contentsOf: chunk[0..<count])
+            while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                let line = Data(pending[pending.startIndex..<newline])
+                pending.removeSubrange(pending.startIndex...newline)
+                DispatchQueue.main.async { deliver(line) }
+            }
+        }
+    }
+    thread.name = "html-popup inbound"
+    thread.start()
+}
+
+enum Inbound {
+    case close
+    case message(String)
+}
+
+// Classify one inbound line. Returns nil for blank or invalid lines.
+func parseInbound(_ line: Data) -> Inbound? {
+    guard let text = String(data: line, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
+    else { return nil }
+    guard let value = try? JSONSerialization.jsonObject(
+        with: Data(text.utf8), options: .fragmentsAllowed)
+    else {
+        log("dropped inbound line that is not JSON: \(text.prefix(200))")
+        return nil
+    }
+    if let object = value as? [String: String], object == ["htmlPopup": "close"] {
+        return .close
+    }
+    return .message(text)
 }
 
 // Read and validate --data. Returns the JSON text, kept as-is so numbers
@@ -261,7 +323,10 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private let dataJSON: String?
     private let events: EventLog
     private var window: NSWindow?
+    private var webView: WKWebView?
     private var isReady = false
+    // Inbound messages that arrived before the page finished loading.
+    private var queued: [String] = []
 
     private var testMode: Bool { options.testScript != nil }
 
@@ -310,6 +375,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         window.contentView = container
         window.center()
         self.window = window
+        self.webView = web
 
         if testMode {
             // Ordered front but invisible, not hidden: WebKit then keeps
@@ -385,7 +451,29 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         guard !isReady else { return }
         isReady = true
         events.append("ready")
+        queued.forEach(deliverToPage)
+        queued.removeAll()
         runTestScript(in: webView)
+    }
+
+    func receive(_ line: Data) {
+        switch parseInbound(line) {
+        case .close?:
+            events.close(.agent)
+        case .message(let text)?:
+            if isReady { deliverToPage(text) } else { queued.append(text) }
+        case nil:
+            break
+        }
+    }
+
+    // The JSON text goes in as a string literal and is JSON.parse'd by the
+    // bridge, so agent data is never evaluated as page source.
+    private func deliverToPage(_ json: String) {
+        webView?.evaluateJavaScript("window.htmlPopup._receive(\(jsonString(json)))") {
+            _, error in
+            if let error { log("message delivery failed: \(error)") }
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
@@ -501,9 +589,9 @@ do {
     exit(2)
 }
 
-let events: EventLog
+let session: Session
 do {
-    events = try startSession(options.session)
+    session = try startSession(options.session)
 } catch UsageError.message(let text) {
     log(text)
     exit(2)
@@ -511,6 +599,7 @@ do {
     log("cannot set up session: \(error.localizedDescription)")
     exit(2)
 }
+let events = session.events
 
 let pageURL = URL(fileURLWithPath: options.page).standardizedFileURL
 if !FileManager.default.isReadableFile(atPath: pageURL.path) {
@@ -532,4 +621,5 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let viewer = Viewer(options: options, pageURL: pageURL, dataJSON: dataJSON, events: events)
 app.delegate = viewer
+startInboundReader(fd: session.inbound, deliver: viewer.receive)
 app.run()

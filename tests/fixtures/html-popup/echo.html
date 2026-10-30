@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>html-popup echo fixture</title>
+<script>
+// Sends every message from the agent straight back as a page event.
+htmlPopup.onMessage((value) => htmlPopup.send(value));
+</script>
+</head>
+<body>
+<p>Echo</p>
+</body>
+</html>

@@ -376,16 +376,16 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `tests/fixtures/html-popup/echo.html`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] reader thread on `DIR/in` opened read-write; buffer partial lines;
+- [x] reader thread on `DIR/in` opened read-write; buffer partial lines;
       validate JSON; deliver as a string literal `JSON.parse`d in the page
       on the main thread
-- [ ] handle `{"htmlPopup":"close"}` → `closed`/`agent`; log invalid lines
+- [x] handle `{"htmlPopup":"close"}` → `closed`/`agent`; log invalid lines
       to `viewer.log` and drop them
-- [ ] write tests (echo page re-sends every received message): a written
+- [x] write tests (echo page re-sends every received message): a written
       line comes back as a `message` event; a >64 KB message arrives intact
-- [ ] write tests for edge cases: an invalid line is dropped and the next
+- [x] write tests for edge cases: an invalid line is dropped and the next
       valid one still arrives; close line → `closed`/`agent` and exit 0
-- [ ] run tests — must pass before task 6
+- [x] run tests — must pass before task 6
 
 ### Task 6: Wrapper — show, ask and live commands
 

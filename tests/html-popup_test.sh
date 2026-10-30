@@ -543,6 +543,128 @@ test_bridge_bad_data() {
     contains "no-such-data.json" "$(event_field "$EVENTS" 1 .message)"
 }
 
+# --- Tests: inbound FIFO (agent -> page) ---------------------------------------
+
+# start_viewer <args...> : start the viewer in the background (tracked for
+# cleanup) and store its pid in VIEWER_PID. Collect it with finish_viewer.
+start_viewer() {
+  "$VIEWER_BIN" "$@" >/dev/null 2>&1 &
+  VIEWER_PID=$!
+  track_pid "$VIEWER_PID"
+}
+
+# finish_viewer : wait for the VIEWER_PID started by start_viewer; set RC.
+finish_viewer() {
+  set +e
+  wait "$VIEWER_PID"
+  RC=$?
+  set -e
+}
+
+# wait_for_event <events file> <jq condition> <seconds> : poll until some
+# event matches the condition; non-zero when time runs out.
+wait_for_event() {
+  local file="$1" cond="$2" tries=$(($3 * 10))
+  while ((tries-- > 0)); do
+    if [[ -f "$file" ]] &&
+      jq -en "any(inputs; $cond)" "$file" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# fifo_write <fifo> <text> : write text plus a newline to the FIFO. A
+# read-write open never blocks, but a large write blocks until the viewer
+# reads it, so a watchdog bounds the call in case the viewer is gone.
+fifo_write() {
+  local writer watchdog rc=0
+  (
+    exec 3<>"$1"
+    printf '%s\n' "$2" >&3
+  ) &
+  writer=$!
+  # Detached from our stdout, so a lingering sleep cannot hold a pipe open.
+  (sleep 10 && kill "$writer" 2>/dev/null) >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$writer" || rc=$?
+  pkill -P "$watchdog" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
+
+# start_echo : run echo.html in a fresh session and wait for ready; sets
+# SESSION, EVENTS and VIEWER_PID.
+start_echo() {
+  new_tmpdir SESSION
+  EVENTS="$SESSION/events.jsonl"
+  start_viewer "$FIXTURES/echo.html" --session "$SESSION" --timeout 20 \
+    --test-script "$FIXTURES/noop.js"
+  assert "echo page becomes ready" \
+    wait_for_event "$EVENTS" '.type == "ready"' 10
+}
+
+test_inbound_echo() {
+  skip_unless_gui "inbound messages" || return 0
+  ensure_viewer
+  local big
+  start_echo
+
+  assert "small message is written" \
+    fifo_write "$SESSION/in" '{"action":"select","month":7}'
+  assert "small message comes back as a message event" \
+    wait_for_event "$EVENTS" '.type == "message" and .data.month == 7' 5
+  assert_eq "small message round-trips exactly" \
+    '{"seq":2,"type":"message","data":{"action":"select","month":7}}' \
+    "$(sed -n 2p "$EVENTS")"
+
+  # Larger than any pipe buffer, so it arrives in several reads.
+  big="$(jq -cn '{blob: ("0123456789abcdef" * 4500), n: 1.5}')"
+  assert "message is over 64 KB" test "${#big}" -gt 65536
+  assert "large message is written" fifo_write "$SESSION/in" "$big"
+  assert "large message comes back" \
+    wait_for_event "$EVENTS" '.type == "message" and .data.n == 1.5' 10
+  assert_eq "large message arrives intact" "$big" \
+    "$(jq -c 'select(.data.n == 1.5) | .data' "$EVENTS")"
+
+  assert "close line is written" fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
+  finish_viewer
+  assert_eq "close line exits 0" "0" "$RC"
+  assert_eq "close line closes with reason agent" \
+    '{"seq":4,"type":"closed","reason":"agent"}' "$(tail -n 1 "$EVENTS")"
+}
+
+test_inbound_invalid() {
+  skip_unless_gui "inbound invalid lines" || return 0
+  ensure_viewer
+  start_echo
+
+  assert "invalid line is written" fifo_write "$SESSION/in" '{"broken":'
+  assert "blank line is written" fifo_write "$SESSION/in" ''
+  assert "valid line after it is written" fifo_write "$SESSION/in" '"after"'
+  assert "valid line after an invalid one arrives" \
+    wait_for_event "$EVENTS" '.type == "message"' 5
+  assert_eq "only the valid line reaches the page" \
+    '{"seq":2,"type":"message","data":"after"}' "$(sed -n 2p "$EVENTS")"
+  assert "invalid line is logged" \
+    contains "not JSON" "$(cat "$SESSION/viewer.log")"
+
+  # Two messages in one write still arrive as two events.
+  assert "two lines in one write" \
+    fifo_write "$SESSION/in" "$(printf '1\n[2]')"
+  assert "both lines of one write arrive" \
+    wait_for_event "$EVENTS" '.seq == 4 and .data == [2]' 5
+  assert_eq "first line of one write arrives first" "1" \
+    "$(event_field "$EVENTS" 3 .data)"
+
+  assert "close line is written" fifo_write "$SESSION/in" '{"htmlPopup":"close"}'
+  finish_viewer
+  assert_eq "close after invalid input exits 0" "0" "$RC"
+  assert_eq "close reason is agent" "agent" "$(tail -n 1 "$EVENTS" | jq -r .reason)"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -564,6 +686,8 @@ main() {
   test_bridge_data
   test_bridge_escape
   test_bridge_bad_data
+  test_inbound_echo
+  test_inbound_invalid
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }
