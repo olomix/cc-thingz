@@ -37,10 +37,13 @@
   over the top 32pt calling `window.performDrag(with:)` (the web view would
   otherwise swallow title-bar drags), data injected with a `WKUserScript` at
   document start, answers via `webkit.messageHandlers.<name>.postMessage`,
-  `NSApp.setActivationPolicy(.accessory)` + `NSApp.activate(ignoringOtherApps:)`
-  so an unbundled binary shows a focused window without a Dock icon, window
-  title set from the page `<title>` in `webView(_:didFinish:)`, no backdrop
-  and no floating level (the user rejected both).
+  `NSApp.setActivationPolicy(.accessory)` so an unbundled binary has no Dock
+  icon; on open `orderFrontRegardless` + `NSApp.activate()` (macOS 14+,
+  `activate(ignoringOtherApps:)` before) and a `.floating` level only until
+  the window first becomes key in an active app, because macOS may deny
+  activation to the detached process; window title set from the page
+  `<title>` in `webView(_:didFinish:)`, no backdrop and no permanent floating
+  level (the user rejected both).
 - Dependencies: macOS, `swiftc` (Xcode Command Line Tools), `jq`.
 
 ## Development Approach
@@ -578,6 +581,8 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - first-run build time with a cold cache (expect a few seconds)
 - run `check` and the solar example from Claude Code with Bash sandboxing
   enabled; note required permissions in SKILL.md if any
+- popup appears in front of the terminal and accepts Return/Esc; after it
+  gets focus it drops behind other apps when they are clicked (not floating)
 
 **External system updates**:
 - install with `/plugin marketplace update` and `/plugin install html-popup`

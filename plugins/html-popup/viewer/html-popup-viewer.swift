@@ -374,9 +374,17 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
             window.alphaValue = 0
             window.orderFrontRegardless()
         } else {
+            // A detached accessory process may be denied activation (macOS
+            // 14+), so float until the window first becomes key.
+            window.level = .floating
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             window.makeFirstResponder(web)
-            NSApp.activate(ignoringOtherApps: true)
+            if #available(macOS 14, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
 
         if let timeout = options.timeout {
@@ -454,6 +462,21 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
         ]))
         return main
+    }
+
+    // Drop the launch-time floating level once the window really has focus:
+    // the user wants a regular window. An inactive app can report key early.
+    func windowDidBecomeKey(_ notification: Notification) {
+        dropLaunchFloatIfFocused()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        dropLaunchFloatIfFocused()
+    }
+
+    private func dropLaunchFloatIfFocused() {
+        guard NSApp.isActive, let window, window.isKeyWindow else { return }
+        window.level = .normal
     }
 
     // The close button and Cmd-W both arrive here.
