@@ -2174,9 +2174,11 @@ test_skill() {
     assert "SKILL.md path exists: $path" test -e "$PLUGIN_DIR/$path"
   done <<<"$paths"
   # shellcheck disable=SC2016 # literal text the skill must contain
-  assert "SKILL.md uses the wrapper via CLAUDE_PLUGIN_ROOT" \
-    contains '"${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"' \
-    "$(cat "$SKILL_MD")"
+  assert "SKILL.md roots paths at CLAUDE_PLUGIN_ROOT" \
+    contains 'R="${CLAUDE_PLUGIN_ROOT:-' "$(cat "$SKILL_MD")"
+  # shellcheck disable=SC2016 # literal text the skill must contain
+  assert "SKILL.md calls the wrapper under the plugin root" \
+    contains 'P="$R/scripts/html-popup.sh"' "$(cat "$SKILL_MD")"
 }
 
 # --- Runner -------------------------------------------------------------------

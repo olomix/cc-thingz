@@ -15,13 +15,18 @@ You show HTML pages in a native macOS window through one wrapper script.
 The window runs detached: a Bash call that times out or is killed never
 closes it.
 
+`R` is the plugin root: `${CLAUDE_PLUGIN_ROOT}` when installed as a plugin,
+otherwise two levels above this skill's base directory (e.g. a skill
+symlinked into `~/.claude/skills/`).
+
 ```sh
-P="${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"
+R="${CLAUDE_PLUGIN_ROOT:-<this skill's base directory>/../..}"
+P="$R/scripts/html-popup.sh"
 ```
 
 ## Writing the page (token-saving rules)
 
-- Copy `${CLAUDE_PLUGIN_ROOT}/assets/template.html` into a scratch/temp dir
+- Copy `$R/assets/template.html` into a scratch/temp dir
   and edit only `<title>`, the header and the `#body` slot. Delete the
   `#details` panel and Details button unless you use live mode.
 - Put data in a JSON file and pass `--data FILE`; the page reads it as
@@ -32,7 +37,7 @@ P="${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"
 - Look native: system font, follow light/dark with the template's CSS
   variables, keep its 44px top padding (traffic lights). No dimming
   backdrops or modal overlays, no thick colored accent strips at the top.
-- Read `${CLAUDE_PLUGIN_ROOT}/examples/solar-2025/` (`report.html`,
+- Read `$R/examples/solar-2025/` (`report.html`,
   `data.json`, `run.sh`) only when you need a full live pattern.
 
 ## Page API (`window.htmlPopup`, injected; no script include)
