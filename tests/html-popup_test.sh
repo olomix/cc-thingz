@@ -225,6 +225,12 @@ copy_plugin() {
   printf -v "$1" '%s' "$copy_root"
 }
 
+# dir_entries <dir> : names in dir, sorted and space separated.
+dir_entries() {
+  { find "$1" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null ||
+    true; } | sort | xargs
+}
+
 # count_lines <file> : number of lines, 0 when the file does not exist.
 count_lines() {
   if [[ -f "$1" ]]; then
@@ -270,9 +276,25 @@ test_dispatch() {
 
 # --- Tests: build with hash cache ---------------------------------------------
 
+# bundle_exec <bundle> : the viewer executable inside a built bundle.
+bundle_exec() {
+  printf '%s/Contents/MacOS/%s' "$1" "$(basename "$1" .app)"
+}
+
+# bundle_hash <plugin root> : the cache key build is expected to use.
+bundle_hash() {
+  local hash
+  hash="$({
+    printf 'layout 1\n'
+    cat "$1/viewer/html-popup-viewer.swift" "$1/viewer/Info.plist" \
+      "$1/viewer/AppIcon.icns"
+  } | shasum -a 256)"
+  printf '%s' "${hash:0:12}"
+}
+
 test_build_cache() {
   skip_unless_macos "build cache" || return 0
-  local root cache calls wrapper first second hash
+  local root cache calls wrapper first second third name plist
   copy_plugin root
   new_tmpdir cache
   calls="$cache/calls"
@@ -283,46 +305,91 @@ test_build_cache() {
   run_capture "$wrapper" build
   assert_eq "build exits 0" "0" "$RC"
   first="$OUT"
-  hash="$(shasum -a 256 "$root/viewer/html-popup-viewer.swift")"
-  assert_eq "binary is named after the source hash" \
-    "$cache/bin/html-popup-viewer-${hash:0:12}" "$first"
-  assert "built binary is executable" test -x "$first"
+  name="html-popup-viewer-$(bundle_hash "$root")"
+  assert_eq "bundle is named after the input hash" \
+    "$cache/bin/$name.app" "$first"
+  assert_eq "bundle root holds only Contents" "Contents" \
+    "$(dir_entries "$first")"
+  assert "bundle executable is named like the bundle" \
+    test -x "$first/Contents/MacOS/$name"
+  assert "bundle has the icon" \
+    cmp -s "$root/viewer/AppIcon.icns" "$first/Contents/Resources/AppIcon.icns"
+  plist="$first/Contents/Info.plist"
+  assert_eq "CFBundleExecutable is filled in" "$name" \
+    "$(plutil -extract CFBundleExecutable raw -o - "$plist")"
+  assert_eq "CFBundleName is HTML Popup" "HTML Popup" \
+    "$(plutil -extract CFBundleName raw -o - "$plist")"
   assert_eq "first build compiles once" "1" "$(count_lines "$calls")"
 
   run_capture "$wrapper" build
   assert_eq "second build exits 0" "0" "$RC"
-  assert_eq "second build reuses the binary" "$first" "$OUT"
+  assert_eq "second build reuses the bundle" "$first" "$OUT"
   assert_eq "second build does not compile" "1" "$(count_lines "$calls")"
 
   printf '// changed\n' >>"$root/viewer/html-popup-viewer.swift"
   run_capture "$wrapper" build
   second="$OUT"
   assert_eq "changed source builds" "0" "$RC"
-  assert "changed source gets a new binary" test "$first" != "$second"
-  assert "new binary is executable" test -x "$second"
+  assert "changed source gets a new bundle" test "$first" != "$second"
+  assert "new bundle is executable" test -x "$(bundle_exec "$second")"
   assert_eq "changed source compiles again" "2" "$(count_lines "$calls")"
-  assert "binary used within a day is kept" test -e "$first"
+  assert "bundle used within a day is kept" test -e "$first"
 
-  # Each use refreshes the binary; only files unused for a day are pruned.
-  touch -t 202001010000 "$first" "$second"
-  touch -t 202001010000 "$first.tmp.1"
+  sed -i '' 's/<string>13.0</<string>13.1</' "$root/viewer/Info.plist"
+  run_capture "$wrapper" build
+  third="$OUT"
+  assert_eq "changed Info.plist builds" "0" "$RC"
+  assert "changed Info.plist gets a new bundle" test "$second" != "$third"
+  assert_eq "changed Info.plist compiles again" "3" "$(count_lines "$calls")"
+
+  printf 'x' >>"$root/viewer/AppIcon.icns"
+  run_capture "$wrapper" build
+  assert_eq "changed icon builds" "0" "$RC"
+  assert "changed icon gets a new bundle" test "$third" != "$OUT"
+  assert_eq "changed icon compiles again" "4" "$(count_lines "$calls")"
+  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_CALLS
+}
+
+test_build_prune() {
+  skip_unless_macos "build prune" || return 0
+  local cache bin wrapper current old
+  new_tmpdir cache
+  bin="$cache/bin"
+  wrapper="$PLUGIN_DIR/scripts/html-popup.sh"
+  export CLAUDE_PLUGIN_DATA="$bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
+
+  run_capture "$wrapper" build
+  assert_eq "build exits 0" "0" "$RC"
+  current="$OUT"
+  # Old bundles, temp dirs and legacy loose binaries from earlier versions.
+  old="$bin/html-popup-viewer-000000000000"
+  mkdir -p "$old.app/Contents/MacOS" "$old.app.tmp.1/Contents"
+  : >"$old" && : >"$old.tmp.2"
+  mkdir -p "$bin/html-popup-viewer-111111111111.app/Contents"
+  touch -t 202001010000 "$old.app" "$old.app.tmp.1" "$old" "$old.tmp.2" \
+    "$current"
   run_capture "$wrapper" build
   assert_eq "cached build exits 0" "0" "$RC"
-  assert "a cached build refreshes its binary" \
-    test -z "$(find "$second" -mtime +0)"
-  printf '// changed again\n' >>"$root/viewer/html-popup-viewer.swift"
-  run_capture "$wrapper" build
-  assert_eq "third source builds" "0" "$RC"
-  assert "binary unused for a day is removed" test ! -e "$first"
-  assert "old temp file is removed" test ! -e "$first.tmp.1"
-  assert "recently used binary is kept" test -x "$second"
+  assert "a cached build refreshes its bundle" \
+    test -z "$(find "$current" -maxdepth 0 -mtime +0)"
+  assert "cache hit does not prune" test -e "$old.app"
 
-  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_CALLS
+  rm -rf "$current"
+  run_capture "$wrapper" build
+  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC
+  assert_eq "rebuild exits 0" "0" "$RC"
+  assert "bundle unused for a day is removed" test ! -e "$old.app"
+  assert "old temp dir is removed" test ! -e "$old.app.tmp.1"
+  assert "legacy binary is removed" test ! -e "$old"
+  assert "legacy temp file is removed" test ! -e "$old.tmp.2"
+  assert "recently used bundle is kept" \
+    test -d "$bin/html-popup-viewer-111111111111.app"
+  assert "rebuilt bundle is executable" test -x "$(bundle_exec "$OUT")"
 }
 
 test_build_concurrent() {
   skip_unless_macos "concurrent builds" || return 0
-  local cache wrapper out1 out2 rc1=0 rc2=0 pid1 pid2 bins
+  local cache wrapper out1 out2 rc1=0 rc2=0 pid1 pid2 entries
   new_tmpdir cache
   wrapper="$PLUGIN_DIR/scripts/html-popup.sh"
   export CLAUDE_PLUGIN_DATA="$cache/bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
@@ -343,9 +410,12 @@ test_build_concurrent() {
   assert_eq "first concurrent build exits 0" "0" "$rc1"
   assert_eq "second concurrent build exits 0" "0" "$rc2"
   assert_eq "concurrent builds print the same path" "$out1" "$out2"
-  bins="$(find "$cache/bin" -type f | wc -l | tr -d ' ')"
-  assert_eq "concurrent builds leave exactly one file" "1" "$bins"
-  assert "the one file is the executable binary" test -x "$out1"
+  entries="$(dir_entries "$cache/bin")"
+  assert_eq "concurrent builds leave exactly one bundle" \
+    "$(basename "$out1")" "$entries"
+  assert_eq "the bundle root holds only Contents" "Contents" \
+    "$(dir_entries "$out1")"
+  assert "the bundle executable runs" test -x "$(bundle_exec "$out1")"
 }
 
 # --- Tests: check and build errors --------------------------------------------
@@ -433,8 +503,25 @@ test_compiler_failure() {
   assert "failed compile is reported" contains "failed to compile" "$ERR"
   assert "compiler output is passed through" \
     contains "simulated compile failure" "$ERR"
-  left="$(find "$cache/bin" -type f | wc -l | tr -d ' ')"
-  assert_eq "failed compile leaves no binary behind" "0" "$left"
+  left="$(dir_entries "$cache/bin")"
+  assert_eq "failed compile leaves no bundle or temp dir" "" "$left"
+}
+
+test_missing_bundle_inputs() {
+  skip_unless_macos "missing bundle inputs" || return 0
+  local root cache file
+  for file in Info.plist AppIcon.icns; do
+    copy_plugin root
+    new_tmpdir cache
+    rm "$root/viewer/$file"
+    run_capture env CLAUDE_PLUGIN_DATA="$cache/bin" \
+      HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$root/scripts/html-popup.sh" build
+    assert_eq "build without $file exits 2" "2" "$RC"
+    assert "build names the missing $file" contains "$file" "$ERR"
+    assert "build without $file prints no path" test -z "$OUT"
+    assert_eq "build without $file leaves the cache empty" "" \
+      "$(dir_entries "$cache/bin")"
+  done
 }
 
 # Compiles the real viewer source, so it needs Xcode tools.
@@ -449,14 +536,15 @@ test_real_build() {
 
 # --- Helpers: running the real viewer -----------------------------------------
 
-# ensure_viewer : compile the real viewer once per run into VIEWER_BIN.
+# ensure_viewer : build the real viewer once per run; VIEWER_BIN is the
+# executable inside the bundle.
 ensure_viewer() {
   [[ -n "$VIEWER_BIN" ]] && return 0
   new_tmpdir VIEWER_CACHE
   run_capture env CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
     "$PLUGIN_DIR/scripts/html-popup.sh" build
   assert_eq "viewer builds for viewer tests" "0" "$RC"
-  VIEWER_BIN="$OUT"
+  VIEWER_BIN="$(bundle_exec "$OUT")"
 }
 
 # start_viewer <args...> : start the viewer in the background (tracked for
@@ -2202,12 +2290,14 @@ main() {
   test_harness
   test_dispatch
   test_build_cache
+  test_build_prune
   test_build_concurrent
   test_missing_jq
   test_check_ok
   test_missing_compiler
   test_unwritable_cache
   test_compiler_failure
+  test_missing_bundle_inputs
   test_real_build
   test_viewer_startup
   test_viewer_errors

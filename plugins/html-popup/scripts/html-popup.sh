@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # html-popup.sh — show an HTML page in a native macOS window and exchange
-# data with it. Builds and caches the Swift viewer on first use.
+# data with it. Builds and caches the Swift viewer as an app on first use.
 #
 # Usage: html-popup.sh <command> [args...]  (see usage below)
 #
@@ -22,6 +22,10 @@ set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIEWER_SRC="$PLUGIN_ROOT/viewer/html-popup-viewer.swift"
+VIEWER_PLIST="$PLUGIN_ROOT/viewer/Info.plist"
+VIEWER_ICON="$PLUGIN_ROOT/viewer/AppIcon.icns"
+# Part of the cache key: bump it when the bundle is assembled differently.
+BUNDLE_LAYOUT=1
 CACHE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}"
 TMP_ROOT="${TMPDIR:-/tmp}"
 TMP_ROOT="${TMP_ROOT%/}"
@@ -45,7 +49,7 @@ usage() {
   cat >&2 <<'EOF'
 usage: html-popup.sh <command> [args...]
   check                          verify macOS, swiftc, jq, cache, GUI session
-  build                          build the viewer if needed, print its path
+  build                          build the viewer app if needed, print its path
   show PAGE [opts]               open, wait until the page loads, print DIR
   ask PAGE [opts] [--wait SEC]   wait for the answer, print it as JSON
   ask --resume DIR [--wait SEC]  keep waiting on an earlier ask
@@ -117,43 +121,67 @@ pid_alive() {
   [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null
 }
 
-# viewer_path : print the cached binary path for the current viewer source.
-# The source hash is the cache key, so plugin updates rebuild automatically.
+# viewer_path : print the cached app bundle path for the current viewer.
+# The hash of its inputs is the cache key, so plugin updates rebuild.
 viewer_path() {
   local hash
-  hash="$(shasum -a 256 "$VIEWER_SRC")"
-  printf '%s/html-popup-viewer-%s' "$CACHE_DIR" "${hash:0:12}"
+  hash="$({
+    printf 'layout %s\n' "$BUNDLE_LAYOUT"
+    cat "$VIEWER_SRC" "$VIEWER_PLIST" "$VIEWER_ICON"
+  } | shasum -a 256)"
+  printf '%s/html-popup-viewer-%s.app' "$CACHE_DIR" "${hash:0:12}"
 }
 
-# build_viewer : compile the viewer unless cached; print its path.
+# viewer_exec <bundle> : print the executable inside a viewer bundle. It is
+# named like the bundle, which is how viewer_alive recognises the viewer.
+viewer_exec() {
+  local name="${1##*/}"
+  printf '%s/Contents/MacOS/%s' "$1" "${name%.app}"
+}
+
+# build_viewer : build the viewer app bundle unless cached; print its path.
 build_viewer() {
   (($# == 0)) || die "unexpected argument: $1"
-  local failed=0 bin tmp
+  local failed=0 bundle name tmp exe
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
   ((failed == 0)) || exit 2
   [[ -r "$VIEWER_SRC" ]] || die "viewer source not found: $VIEWER_SRC"
+  [[ -r "$VIEWER_PLIST" ]] || die "viewer Info.plist not found: $VIEWER_PLIST"
+  [[ -r "$VIEWER_ICON" ]] || die "viewer icon not found: $VIEWER_ICON"
 
-  bin="$(viewer_path)"
-  # Touch on use: pruning below spares binaries used within the last day.
-  if [[ -x "$bin" ]] && touch "$bin"; then
-    printf '%s\n' "$bin"
+  bundle="$(viewer_path)"
+  name="${bundle##*/}"
+  name="${name%.app}"
+  # Touch on use: pruning below spares bundles used within the last day.
+  if [[ -x "$(viewer_exec "$bundle")" ]] && touch "$bundle"; then
+    printf '%s\n' "$bundle"
     return 0
   fi
-  # A per-process temp name plus an atomic mv keeps concurrent first uses
-  # from running a half-written binary.
-  tmp="$bin.tmp.$$"
-  if ! "${SWIFTC[@]}" -O -o "$tmp" "$VIEWER_SRC" >&2; then
-    rm -f "$tmp"
+  # A per-process temp dir plus an atomic mv keeps concurrent first uses
+  # from running a half-built bundle.
+  tmp="$bundle.tmp.$$"
+  rm -rf "$tmp"
+  mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources"
+  exe="$tmp/Contents/MacOS/$name"
+  if ! "${SWIFTC[@]}" -O -o "$exe" "$VIEWER_SRC" >&2; then
+    rm -rf "$tmp"
     die "failed to compile the viewer"
   fi
-  mv -f "$tmp" "$bin"
-  # Other plugin versions may build or launch their binary right now, so
-  # drop only binaries and temp files unused for over a day.
+  sed "s/@EXECUTABLE@/$name/" "$VIEWER_PLIST" >"$tmp/Contents/Info.plist"
+  cp "$VIEWER_ICON" "$tmp/Contents/Resources/AppIcon.icns"
+  # If another build installed the bundle first, mv fails (macOS refuses a
+  # non-empty target) or, lacking -T, moves ours inside it. Keep theirs.
+  mv "$tmp" "$bundle" 2>/dev/null || true
+  rm -rf "$tmp" "${bundle:?}/${tmp##*/}"
+  [[ -x "$(viewer_exec "$bundle")" ]] ||
+    die "failed to install the viewer bundle: $bundle"
+  # Other plugin versions may build or launch their bundle right now, so
+  # drop only bundles, temp dirs and legacy binaries unused for over a day.
   find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' -mtime +0 \
-    -exec rm -f {} + 2>/dev/null || true
-  printf '%s\n' "$bin"
+    -exec rm -rf {} + 2>/dev/null || true
+  printf '%s\n' "$bundle"
 }
 
 # --- Sessions -----------------------------------------------------------
@@ -436,6 +464,7 @@ start_session() {
   fi
 
   bin="$(build_viewer)" || exit 2
+  bin="$(viewer_exec "$bin")"
   SESSION_DIR="$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")"
   printf '%s\n' "$(($(date +%s) + READY_WAIT))" >"$SESSION_DIR/ready_by"
 

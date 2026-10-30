@@ -10,6 +10,8 @@
 #                          wrapper tests can run a scripted fake viewer
 #   FAKE_SWIFTC_EXEC_DELAY=SEC  stub sleeps before taking the viewer name,
 #                          like a viewer slow to exec
+#   FAKE_SWIFTC_NO_PID=1   stub never writes DIR/pid (the real viewer and the
+#                          stub write it after exec, before their work)
 set -euo pipefail
 
 out=""
@@ -44,6 +46,9 @@ cat >"$out" <<EOF
 if [[ -z "\${FAKE_VIEWER_NAMED:-}" ]]; then
   sleep ${FAKE_SWIFTC_EXEC_DELAY:-0}
   FAKE_VIEWER_NAMED=1 exec -a "\$0" /bin/bash "\$0" "\$@"
+fi
+if [[ -z "${FAKE_SWIFTC_NO_PID:-}" && "\${2:-}" == --session ]]; then
+  printf '%s\\n' "\$\$" >"\$3/pid"
 fi
 idle() { local i; for ((i = 0; i < \$1 * 5; i++)); do sleep 0.2; done; }
 ${FAKE_SWIFTC_BODY:-exit 0}

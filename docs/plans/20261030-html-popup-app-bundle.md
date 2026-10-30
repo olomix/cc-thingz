@@ -380,24 +380,30 @@ margin and squircle corners.
   never writing it)
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] add the `Info.plist` template from Technical Details
-- [ ] cache key over the layout version, Swift source, plist and icon
-- [ ] assemble the bundle in a temp dir and install it; remove a nested
+- [x] add the `Info.plist` template from Technical Details
+- [x] cache key over the layout version, Swift source, plist and icon
+- [x] assemble the bundle in a temp dir and install it; remove a nested
       temp dir left by a concurrent builder
-- [ ] print the bundle path; touch on cache hit; prune old bundles, temp
+- [x] print the bundle path; touch on cache hit; prune old bundles, temp
       dirs and legacy loose binaries with `rm -rf`
-- [ ] update callers so the rest of the wrapper still works with the
+- [x] update callers so the rest of the wrapper still works with the
       bundle (still launched directly in this task; launch changes in
       Task 4); update the fake-swiftc stub to write its pid
-- [ ] run `shellcheck`
-- [ ] write tests: bundle layout and filled-in `CFBundleExecutable`
+- [x] run `shellcheck`
+- [x] write tests: bundle layout and filled-in `CFBundleExecutable`
       (`plutil -extract`); cache hit does not recompile; changing
       `Info.plist` or the icon rebuilds; concurrent builds leave one bundle
       whose root holds only `Contents`; old bundles and legacy binaries are
       pruned
-- [ ] write tests for errors: compiler failure leaves no bundle or temp
+- [x] write tests for errors: compiler failure leaves no bundle or temp
       dir; missing `Info.plist`/icon → exit 2 with a message
-- [ ] run tests — must pass before task 4
+- [x] run tests — must pass before task 4
+
+Result: on macOS 27 `mv` onto an existing non-empty bundle fails with
+"Directory not empty" instead of moving the temp dir inside, so the
+install step ignores the `mv` status, removes our temp dir from either
+place and then requires the bundle executable to exist. The fake-swiftc
+stub writes its pid unless built with `FAKE_SWIFTC_NO_PID=1`.
 
 ### Task 4: Launch through LaunchServices as a regular app
 
