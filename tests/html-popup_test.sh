@@ -1073,6 +1073,40 @@ test_solar_live() {
   assert "Done closes the window" contains '"reason":"answer"' "$events"
 }
 
+# --- Tests: SKILL.md ------------------------------------------------------------
+
+SKILL_MD="$PLUGIN_DIR/skills/html-popup/SKILL.md"
+
+# skill_frontmatter : print the lines between the opening and closing ---.
+skill_frontmatter() {
+  awk 'NR == 1 && $0 == "---" { inside = 1; next }
+    inside && $0 == "---" { exit }
+    inside { print }' "$SKILL_MD"
+}
+
+test_skill() {
+  local front path paths
+
+  assert "SKILL.md exists" test -f "$SKILL_MD"
+  front="$(skill_frontmatter)"
+  assert "frontmatter names the skill" \
+    contains $'\nname: html-popup\n' $'\n'"$front"$'\n'
+  assert "frontmatter has a description" contains $'\ndescription:' \
+    $'\n'"$front"
+  assert "frontmatter allows Bash, Read and Write" \
+    contains "allowed-tools: Bash, Read, Write" "$front"
+
+  paths="$(grep -oE '(scripts|assets|examples)/[A-Za-z0-9._/-]*[A-Za-z0-9_/]' \
+    "$SKILL_MD" | sort -u)"
+  assert "SKILL.md mentions plugin paths" test -n "$paths"
+  while IFS= read -r path; do
+    assert "SKILL.md path exists: $path" test -e "$PLUGIN_DIR/$path"
+  done <<<"$paths"
+  # shellcheck disable=SC2016 # literal text the skill must contain
+  assert "SKILL.md uses the wrapper via CLAUDE_PLUGIN_ROOT" \
+    contains '"${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"' "$(cat "$SKILL_MD")"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -1106,6 +1140,7 @@ main() {
   test_template_headless
   test_solar_static
   test_solar_live
+  test_skill
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }

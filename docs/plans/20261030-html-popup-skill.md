@@ -461,23 +461,23 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `plugins/html-popup/skills/html-popup/SKILL.md`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] frontmatter: `name: html-popup`, trigger-rich `description` (show an
+- [x] frontmatter: `name: html-popup`, trigger-rich `description` (show an
       HTML report/chart/dialog in a window, ask the user to pick, live
       interactive page), `allowed-tools: Bash, Read, Write`
-- [ ] document modes, bridge API, exit codes and wrapper commands with
+- [x] document modes, bridge API, exit codes and wrapper commands with
       copy-ready snippets for show, ask (+ resume) and a live loop
-- [ ] Bash-tool guidance: `--wait` default 100 s, exit 4 means call again;
+- [x] Bash-tool guidance: `--wait` default 100 s, exit 4 means call again;
       use Monitor on `events.jsonl` or `run_in_background` for long waits;
       never send input to the agent's own pane
-- [ ] token-saving rules: copy `assets/template.html` and fill only the
+- [x] token-saving rules: copy `assets/template.html` and fill only the
       body; pass data with `--data`; read the solar example only when a full
       live pattern is needed; write generated pages to a temp/scratch dir
-- [ ] constraints: macOS + Xcode CLT + `jq`; local files only (no CDN
+- [x] constraints: macOS + Xcode CLT + `jq`; local files only (no CDN
       scripts or remote fonts); run `check` first on errors; note that
       sandboxed Bash may block the cache dir or window access
-- [ ] write tests: frontmatter has `name: html-popup` and a description;
+- [x] write tests: frontmatter has `name: html-popup` and a description;
       every `scripts/`, `assets/` and `examples/` path mentioned exists
-- [ ] run tests — must pass before task 10
+- [x] run tests — must pass before task 10
 
 ### Task 10: Verify acceptance criteria
 - [ ] verify show, ask (with resume) and live modes work as in Overview
