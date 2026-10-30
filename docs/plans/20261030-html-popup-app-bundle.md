@@ -78,6 +78,53 @@ both, the floating fallback is unnecessary and is removed. Open questions
 measured in Task 1 before anything depends on them: test-mode behaviour of
 `open -g`, and file access to TCC-protected folders.
 
+### Task 1 results (2026-10-30, macOS 27, terminal frontmost)
+Throwaway bundles (unique test ids, viewer compiled with an argv log line)
+launched with `open -n … --stdout /dev/null --stderr DIR/viewer.log
+--args …`. The LaunchServices type and the front app were sampled every
+~50 ms for 2 s after launch; then the probe ran.
+
+| Launch | Plist | Policy | Mode | Front app changes? | LS type | Dock tile? |
+|---|---|---|---|---|---|---|
+| `open -n -g` | plain | accessory | test | no | UIElement throughout | no |
+| `open -n -g` | `LSUIElement=1` | accessory | test | no | UIElement throughout | no |
+| `open -n` (no `-g`) | plain | accessory | test | no | UIElement throughout | no |
+| `open -n` | `LSUIElement=1` | regular | normal | **no** (popup inactive) | Foreground | yes |
+| `open -n` | plain | regular | normal | yes, popup active | Foreground | yes |
+
+- Test mode: an accessory bundle launched with `open -n -g` leaves the
+  front app unchanged; no Foreground type or Dock tile was seen in any
+  sample. `LSUIElement` adds nothing, and with `LSUIElement=1` a runtime
+  `.regular` app does **not** become active (it still gets a Dock tile).
+  Decision: no `LSUIElement` in `Info.plist`.
+- Log redirection: `--stderr FILE` captures output written before the
+  viewer's `freopen` (an argv line, and the usage error for a bad option),
+  and appends to an existing file rather than truncating it.
+- `open` exits 0 even when the viewer exits at once with status 2 (bad
+  option): it reports only launch failures (a missing bundle gives exit 1
+  and a message on stderr). Viewer errors must come from `viewer.log` and
+  the events file, not from `open`'s status.
+- argv: LaunchServices adds nothing (no `-psn_…`); argv is exactly the
+  executable path followed by the `--args` values.
+- TCC: page + `--data` file in a temp folder under `~/Documents`, regular
+  bundle, normal mode. The first launch showed the macOS "would like to
+  access files in your Documents folder" prompt (UserNotificationCenter
+  frontmost, layer 8). The read blocked until the prompt was answered by a
+  click on screen (not by the agent); then data and a sibling script
+  loaded. A second launch of the same binary: no prompt, first event in
+  0.8 s. A rebuilt binary (same bundle id, new ad-hoc signature): prompted
+  again, first event after ~6 s. The launched app is its own responsible
+  process, so the terminal's grant no longer covers it, and with ad-hoc
+  signing a grant does not survive a rebuild of the viewer.
+- Consequences: the prompt blocks the viewer before `app.run` (page check
+  and data read), so the `--timeout` timer has not started and the
+  wrapper's 10 s ready deadline can pass while the prompt is open. The
+  abandoned check must also run after the page/data access, right before
+  the window is created. Pages under the system temp dir (what agents
+  normally use) are unaffected. The prompt is documented (Task 6) rather
+  than avoided by staging files: a page may load sibling resources, so
+  copying only the page and data into the session dir would break it.
+
 ## Development Approach
 - **testing approach**: Regular (code first, then tests in the same task)
 - complete each task fully before moving to the next
@@ -175,8 +222,8 @@ Keys: `CFBundleName` and `CFBundleDisplayName` = `HTML Popup`,
 `CFBundleIconFile` = `AppIcon`, `CFBundlePackageType` = `APPL`,
 `NSHighResolutionCapable` = true, `LSMinimumSystemVersion` = `13.0` (the
 viewer has a pre-14 activation fallback; adjust if the code needs more).
-No `LSUIElement` unless Task 1 shows it is needed for quiet test runs and
-still lets the popup take focus.
+No `LSUIElement`: Task 1 showed quiet test runs do not need it, and with
+it a runtime `.regular` app does not take focus.
 
 ### Bundle layout in the cache
 ```
@@ -207,13 +254,16 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
 ```
 - `open` opens `--stdout`/`--stderr` paths separately (append behaviour
   undocumented), so stdout goes to `/dev/null` and only stderr to the log;
-  the viewer's own `freopen(…, "a")` keeps appending. Task 1 checks that
-  early dyld/parse errors still reach `viewer.log`.
+  the viewer's own `freopen(…, "a")` keeps appending. Task 1 confirmed
+  that pre-`freopen` output (e.g. option parse errors) reaches `viewer.log`
+  and that `--stderr` appends.
 - An app launched by LaunchServices starts with cwd `/` and without the
   caller's environment, so the wrapper passes absolute paths for the page,
   `--data`, `--session` and the test script, and forwards
   `HTML_POPUP_TEST_SCRIPT` as `--test-script`.
 - If `open` exits non-zero, startup fails with exit 2 and its message.
+  `open` exits 0 even when the viewer itself fails right away (Task 1), so
+  that case is still detected by the pid handshake and ready wait.
 
 ### Pid handshake
 - After `open` returns, the wrapper polls (every `FIFO_POLL`) for a
@@ -229,8 +279,9 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
 - When the ready deadline passes with no viewer, the wrapper writes
   `DIR/abandoned`, appends `closed` with `reason: error` and exits 3 (as
   for "not ready in 10 s" today). A viewer that starts later sees
-  `DIR/abandoned` right after its session setup and exits without opening
-  a window, so no untracked window is left.
+  `DIR/abandoned` right after its session setup, or again after the page
+  and data access (a TCC prompt can block there, Task 1), and exits
+  without opening a window, so no untracked window is left.
 - A viewer that dies before any event keeps being reported as exit 5 once
   its pid was seen; if it was never seen, the abandoned path applies.
 
@@ -250,7 +301,8 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   `windowDidBecomeKey`, `applicationDidBecomeActive`,
   `dropLaunchFloatIfFocused`). Keep `makeKeyAndOrderFront`,
   `orderFrontRegardless` and `NSApp.activate()`.
-- Exit early if `DIR/abandoned` exists after session setup.
+- Exit early if `DIR/abandoned` exists after session setup, and check
+  again after the page check and data load, before the window is made.
 - `window.isRestorable = false` (a regular app with a fixed bundle id may
   otherwise get saved-state restore).
 - Update stale comments (wrapper writes pid; "unbundled binary has no
@@ -278,23 +330,23 @@ terminal, layer 0).
 Use a throwaway bundle in a temp dir (not the repo), a probe like the one
 in Technical Details, and unregister/delete the bundle afterwards.
 
-- [ ] test-mode launch: `open -n -g -a` an accessory-policy bundle while
+- [x] test-mode launch: `open -n -g -a` an accessory-policy bundle while
       the terminal is frontmost; record whether the frontmost app changes
       and whether a Dock tile appears; repeat with `LSUIElement=1` in the
       plist; also check that `LSUIElement=1` + runtime `.regular` +
       `open` without `-g` still makes the popup active
-- [ ] TCC: launch the regular bundle with a page and a `--data` file in a
+- [x] TCC: launch the regular bundle with a page and a `--data` file in a
       temp folder under `~/Documents` (removed afterwards); record whether
       a permission prompt appears or loading fails
-- [ ] log redirection: confirm `--stderr` captures output written before
+- [x] log redirection: confirm `--stderr` captures output written before
       the viewer's `freopen`, and appends rather than truncates
-- [ ] argv: confirm LaunchServices adds nothing (e.g. `-psn_…`) to argv
-- [ ] write the results into this plan (Measured behaviour) and adjust
+- [x] argv: confirm LaunchServices adds nothing (e.g. `-psn_…`) to argv
+- [x] write the results into this plan (Measured behaviour) and adjust
       Tasks 3–4 and the Info.plist decision if any result differs from
       the assumptions; if TCC prompts, add a task to document it in
       SKILL.md/README (or stage files into the session dir) and log the
       decision
-- [ ] no code or tests change in this task; run the existing suite to
+- [x] no code or tests change in this task; run the existing suite to
       confirm nothing else changed
 
 ### Task 2: Icon assets for the HTML Popup app
@@ -356,8 +408,9 @@ in Technical Details, and unregister/delete the bundle afterwards.
       `--session DIR`, bounded by the ready budget, "still starting"
       sessions accepted by `require_session`, `DIR/abandoned` on give-up)
 - [ ] viewer: `.regular` outside test mode, `.accessory` in test mode;
-      remove the floating fallback; exit early on `DIR/abandoned`;
-      `isRestorable = false`
+      remove the floating fallback; exit early on `DIR/abandoned` (after
+      session setup and again after the page/data access); `isRestorable
+      = false`
 - [ ] update stale comments in the viewer and the wrapper header
       (`HTML_POPUP_OPEN`, no double fork)
 - [ ] add `tests/fixtures/fake-open.sh`; point every fake-viewer test at
@@ -388,8 +441,14 @@ in Technical Details, and unregister/delete the bundle afterwards.
 - [ ] README html-popup section: the viewer is built as a local "HTML
       Popup" app, shows in Cmd-Tab/Dock while open, no signing needed,
       each popup is its own Cmd-Tab entry
-- [ ] SKILL.md: only agent-visible changes (TCC note if Task 1 found a
-      prompt; sandboxed Bash may also need access to LaunchServices)
+- [ ] SKILL.md: only agent-visible changes (TCC note: Task 1 found that a
+      page or `--data` under `~/Documents`, `~/Desktop` or `~/Downloads`
+      triggers a macOS access prompt, again after each viewer rebuild, and
+      startup may time out (exit 3) while it is open, so write generated
+      pages to the system temp dir; sandboxed Bash may also need access to
+      LaunchServices)
+- [ ] ➕ README: the same TCC note for users (one prompt per viewer
+      build for pages under protected folders)
 - [ ] CLAUDE.md: committed generated assets (`AppIcon.icns`) with their
       regeneration script, and the `HTML_POPUP_OPEN` test override
 - [ ] move this plan to `docs/plans/completed/`
@@ -405,8 +464,8 @@ in Technical Details, and unregister/delete the bundle afterwards.
   popup is open; the icon disappears when it closes; two popups show as
   two Cmd-Tab entries
 - the icon looks right at Dock and Cmd-Tab sizes in light and dark mode
-- a page and data under `~/Documents` or `~/Desktop` load (or the
-  documented prompt appears once)
+- a page and data under `~/Documents` or `~/Desktop` load after the
+  documented prompt (Task 1: it appears once per viewer build)
 
 **External system updates**:
 - reload the plugin or skill after merging; the first use rebuilds the
