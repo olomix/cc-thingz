@@ -438,22 +438,22 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `plugins/html-popup/examples/solar-2025/run.sh`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] `data.json` with the 12 months from the Example data table above,
+- [x] `data.json` with the 12 months from the Example data table above,
       `unit`, `title` and the `source` line with the EIA URL
-- [ ] `report.html` built from the template (no duplicated hooks): stacked
+- [x] `report.html` built from the template (no duplicated hooks): stacked
       bars (utility + thermal, small-scale), summary tiles (annual total,
       growth vs 2024, peak month, rooftop share), arrow keys + Return
-- [ ] live behavior: choosing a month sends `{"month":N}`; a details
+- [x] live behavior: choosing a month sends `{"month":N}`; a details
       message from the agent renders in a side panel without closing; Done
       calls `answer(null)`
-- [ ] `run.sh`: `live start`, loop `live wait` → compute details with `jq`
+- [x] `run.sh`: `live start`, loop `live wait` → compute details with `jq`
       (total, split, YoY, rank, share of year, solar/wind ratio) → `live
       send`, until `closed`
-- [ ] write tests: `data.json` has 12 months with all fields and totals equal
+- [x] write tests: `data.json` has 12 months with all fields and totals equal
       utility + small + thermal within ±1; headless run selects a month and
       emits `{"month":N}`; a sent details message renders (test script sends
       the panel text back)
-- [ ] run `shellcheck` on `run.sh`; run tests — must pass before task 9
+- [x] run `shellcheck` on `run.sh`; run tests — must pass before task 9
 
 ### Task 9: SKILL.md — how agents use html-popup
 

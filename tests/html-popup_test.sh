@@ -1017,6 +1017,62 @@ test_template_headless() {
   assert_eq "template window closes" "0" "$RC"
 }
 
+# --- Tests: solar example --------------------------------------------------------
+
+SOLAR="$PLUGIN_DIR/examples/solar-2025"
+
+test_solar_static() {
+  local data="$SOLAR/data.json"
+
+  assert "solar data.json parses" jq empty "$data"
+  assert_eq "solar data has 12 months" "12" "$(jq '.months | length' "$data")"
+  assert_eq "every month has all fields" "true" "$(jq '.months | all(. as $m
+    | ["name", "short", "utility", "small", "thermal", "total", "wind",
+       "total2024"] | all(. as $k | $m | has($k)))' "$data")"
+  assert_eq "monthly fields are numbers" "true" "$(jq '[.months[]
+    | .utility, .small, .thermal, .total, .wind, .total2024 | numbers]
+    | length == 72' "$data")"
+  assert_eq "totals equal utility + small + thermal within 1" "true" \
+    "$(jq '[.months[] | .utility + .small + .thermal - .total
+      | fabs <= 1] | all' "$data")"
+  assert_eq "solar data has unit, title and source" "true" \
+    "$(jq '.unit and .title and .source' "$data")"
+  assert "solar source names the EIA URL" \
+    contains "https://www.eia.gov/electricity/monthly/" \
+    "$(jq -r .source "$data")"
+  assert "solar report references no remote resources" \
+    not_contains "://" "$(cat "$SOLAR/report.html")"
+  assert "run.sh is executable" test -x "$SOLAR/run.sh"
+}
+
+test_solar_live() {
+  skip_unless_gui "solar example live run" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local events
+
+  run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
+    HTML_POPUP_TEST_SCRIPT="$FIXTURES/solar-select.js" \
+    "$SOLAR/run.sh" --timeout 30
+  assert_eq "run.sh exits 0 after Done" "0" "$RC"
+  assert "run.sh prints the chosen month" \
+    contains "June 2025 — US solar generation" "$OUT"
+  assert "run.sh prints the total" contains "42,002 GWh" "$OUT"
+  assert "run.sh prints year over year" \
+    contains "+27.2% year over year" "$OUT"
+  assert "run.sh prints the rank" contains "#2 of 12" "$OUT"
+  assert "run.sh prints solar vs wind" contains "solar = 1.16× wind" "$OUT"
+
+  events="$(cat "$WRAP_TMP"/html-popup.*/events.jsonl)"
+  assert "choosing a month emits its number" \
+    contains '"type":"message","data":{"month":6}' "$events"
+  assert "details from the agent render in the panel" \
+    contains '"data":{"hidden":false,"text":"JuneTotal solar42,002 GWh' \
+    "$events"
+  assert "Done answers null" contains '"type":"answer","data":null' "$events"
+  assert "Done closes the window" contains '"reason":"answer"' "$events"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -1048,6 +1104,8 @@ main() {
   test_wrapper_live_races
   test_template_static
   test_template_headless
+  test_solar_static
+  test_solar_live
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }

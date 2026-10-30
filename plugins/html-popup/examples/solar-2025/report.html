@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<!-- Built from assets/template.html: same layout, bridge hooks and panel. -->
+<title>US Solar Generation 2025</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #d2d2d7; --accent: #e8940f; --accent-text: #ffffff;
+    --utility: #f2a93b; --small: #f3cf5c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --panel: #1c1f26; --text: #e8e6e1; --muted: #8b8f98;
+      --line: #2a2e37; --accent: #ffb547; --accent-text: #14161b;
+      --utility: #f2a93b; --small: #f6d77a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+      "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased; cursor: default;
+    user-select: none; -webkit-user-select: none;
+  }
+  /* 44px top padding keeps content clear of the traffic-light buttons. */
+  main {
+    display: flex; flex-direction: column; height: 100%;
+    padding: 44px 32px 20px;
+  }
+  header h1 {
+    margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  header .sub { color: var(--muted); margin-top: 4px; }
+  .stats { display: flex; gap: 12px; margin-top: 20px; }
+  .stat { flex: 1; background: var(--panel); border-radius: 12px; padding: 12px 16px; }
+  .stat .k, #details .k { color: var(--muted); font-size: 12px; }
+  .stat .v {
+    font-size: 22px; font-weight: 650; margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .v small { font-size: 13px; color: var(--muted); font-weight: 500; }
+  .legend { display: flex; gap: 18px; color: var(--muted); font-size: 12px; margin-top: 14px; }
+  .legend i {
+    display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 6px; vertical-align: -1px;
+  }
+  .content {
+    flex: 1; display: flex; gap: 16px; margin-top: 8px; min-height: 0;
+  }
+  .chart {
+    flex: 1; display: grid; grid-template-columns: repeat(12, 1fr);
+    gap: 8px; align-items: end; padding-top: 10px;
+  }
+  .month {
+    display: flex; flex-direction: column; justify-content: flex-end;
+    height: 100%; border-radius: 10px; padding: 6px 5px 8px; outline: none;
+    transition: background 120ms;
+  }
+  .month:hover, .month.focus { background: var(--panel); }
+  .month.focus { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .val {
+    text-align: center; font-size: 11px; color: var(--muted);
+    font-variant-numeric: tabular-nums; margin-bottom: 4px;
+  }
+  .month:hover .val, .month.focus .val { color: var(--text); }
+  .bar { display: flex; flex-direction: column; border-radius: 6px 6px 3px 3px; overflow: hidden; }
+  .bar .s { background: var(--small); }
+  .bar .u { background: var(--utility); }
+  .label { text-align: center; margin-top: 8px; font-weight: 600; }
+  .panel { background: var(--panel); border-radius: 12px; padding: 14px 16px; }
+  #details { width: 250px; overflow: auto; margin-top: 10px; }
+  #details[hidden] { display: none; }
+  #details h2 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+  #details .v { font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+  .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  button {
+    font: inherit; border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 14px; background: var(--panel); color: var(--text);
+  }
+  button.primary {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  footer {
+    display: flex; justify-content: space-between; gap: 16px; margin-top: 14px;
+    color: var(--muted); font-size: 11.5px;
+  }
+  footer a { color: inherit; }
+  kbd {
+    font: inherit; background: var(--panel); border-radius: 4px;
+    padding: 1px 5px; color: var(--text);
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">US Solar Generation</h1>
+    <div class="sub">Monthly net generation, utility-scale and small-scale
+      (rooftop) solar. Choose a month for details.</div>
+  </header>
+
+  <section class="stats" id="stats"></section>
+  <div class="legend">
+    <span><i style="background:var(--utility)"></i>Utility-scale PV + thermal</span>
+    <span><i style="background:var(--small)"></i>Small-scale PV</span>
+  </div>
+
+  <div class="content">
+    <section class="chart" id="chart"></section>
+    <!-- Filled by details messages from the agent. -->
+    <aside class="panel" id="details" hidden></aside>
+  </div>
+
+  <div class="actions">
+    <button id="answer" class="primary">Done</button>
+  </div>
+
+  <footer>
+    <span id="source"></span>
+    <span><kbd>←</kbd> <kbd>→</kbd> move · <kbd>Return</kbd> choose ·
+      <kbd>Esc</kbd> close</span>
+  </footer>
+</main>
+<script>
+  // htmlPopup is injected by the viewer; htmlPopup.data is data.json.
+  const data = htmlPopup.data;
+  const months = data.months;
+  const fmt = (n) => n.toLocaleString("en-US");
+  const el = (id) => document.getElementById(id);
+
+  el("title").textContent = data.title;
+  const [sourceText, sourceUrl] = data.source.split(/:\s*(?=https?:)/);
+  el("source").textContent = "Source: " + sourceText;
+  if (sourceUrl) {
+    // http(s) links open in the default browser, not in the popup.
+    const link = document.createElement("a");
+    link.href = sourceUrl;
+    link.textContent = "eia.gov";
+    el("source").append(" · ", link);
+  }
+
+  const sum = (key) => months.reduce((s, m) => s + m[key], 0);
+  const total = sum("total");
+  const peak = months.reduce((a, b) => (b.total > a.total ? b : a));
+  const growth = (total / sum("total2024") - 1) * 100;
+  const stats = [
+    ["Annual total", (total / 1000).toFixed(1), "TWh"],
+    ["Growth vs 2024", (growth >= 0 ? "+" : "") + growth.toFixed(1), "%"],
+    ["Peak month", peak.name, fmt(peak.total) + " " + data.unit],
+    ["Rooftop share", (sum("small") / total * 100).toFixed(1), "%"],
+  ];
+  el("stats").replaceChildren(...stats.map(([k, v, u]) => {
+    const tile = document.createElement("div");
+    tile.className = "stat";
+    tile.innerHTML = '<div class="k"></div><div class="v"> <small></small></div>';
+    tile.querySelector(".k").textContent = k;
+    tile.querySelector(".v").prepend(v);
+    tile.querySelector("small").textContent = u;
+    return tile;
+  }));
+
+  // live mode: choosing a month sends {"month": N} (1-12) to the agent.
+  const choose = (i) => htmlPopup.send({ month: i + 1 });
+  const chart = el("chart");
+  months.forEach((m, i) => {
+    const col = document.createElement("div");
+    col.className = "month";
+    col.title = `${m.name}: ${fmt(m.total)} ${data.unit}`;
+    col.innerHTML = `
+      <div class="val">${(m.total / 1000).toFixed(1)}</div>
+      <div class="bar" style="height:${(m.total / peak.total) * 78}%">
+        <div class="s" style="flex:${m.small}"></div>
+        <div class="u" style="flex:${m.utility + m.thermal}"></div>
+      </div>
+      <div class="label">${m.short}</div>`;
+    col.addEventListener("click", () => { setFocus(i); choose(i); });
+    col.addEventListener("mouseenter", () => setFocus(i));
+    chart.appendChild(col);
+  });
+
+  let focus = months.indexOf(peak);
+  function setFocus(i) {
+    focus = (i + months.length) % months.length;
+    [...chart.children].forEach((c, j) => c.classList.toggle("focus", j === focus));
+  }
+  setFocus(focus);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest?.("button")) return;
+    if (e.key === "ArrowRight") setFocus(focus + 1);
+    else if (e.key === "ArrowLeft") setFocus(focus - 1);
+    else if (e.key === "Enter") choose(focus);
+    else return;
+    e.preventDefault();
+  });
+
+  // Done ends the session; the agent sees answer null, then closed.
+  el("answer").addEventListener("click", () => htmlPopup.answer(null));
+
+  // The agent replies with {"month": N, "details": {label: value, ...}}.
+  htmlPopup.onMessage((msg) => {
+    if (!msg || typeof msg.details !== "object") return;
+    const panel = el("details");
+    const heading = document.createElement("h2");
+    heading.textContent = months[msg.month - 1]?.name ?? "Details";
+    panel.replaceChildren(heading, ...Object.entries(msg.details).map(([k, v]) => {
+      const row = document.createElement("div");
+      row.innerHTML = '<div class="k"></div><div class="v"></div>';
+      row.children[0].textContent = k;
+      row.children[1].textContent = String(v);
+      return row;
+    }));
+    panel.hidden = false;
+  });
+</script>
+</body>
+</html>

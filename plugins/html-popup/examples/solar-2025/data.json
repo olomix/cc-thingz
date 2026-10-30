@@ -1,0 +1,19 @@
+{
+  "title": "US Solar Generation, 2025",
+  "unit": "GWh",
+  "source": "EIA Electric Power Monthly, Table 1.1.A, 2025 values final: https://www.eia.gov/electricity/monthly/epm_table_grapher.php?t=epmt_1_01_a",
+  "months": [
+    {"name": "January",   "short": "Jan", "utility": 15622, "small": 5414, "thermal": 88,  "total": 21123, "wind": 42711, "total2024": 14309},
+    {"name": "February",  "short": "Feb", "utility": 16531, "small": 5826, "thermal": 139, "total": 22496, "wind": 38726, "total2024": 17882},
+    {"name": "March",     "short": "Mar", "utility": 23555, "small": 7988, "thermal": 170, "total": 31714, "wind": 49673, "total2024": 23132},
+    {"name": "April",     "short": "Apr", "utility": 26927, "small": 8768, "thermal": 298, "total": 35993, "wind": 45483, "total2024": 27073},
+    {"name": "May",       "short": "May", "utility": 29931, "small": 9306, "thermal": 330, "total": 39566, "wind": 37127, "total2024": 30910},
+    {"name": "June",      "short": "Jun", "utility": 32198, "small": 9416, "thermal": 387, "total": 42002, "wind": 36107, "total2024": 33012},
+    {"name": "July",      "short": "Jul", "utility": 33713, "small": 9847, "thermal": 369, "total": 43929, "wind": 31890, "total2024": 33262},
+    {"name": "August",    "short": "Aug", "utility": 32129, "small": 9312, "thermal": 337, "total": 41778, "wind": 27661, "total2024": 32741},
+    {"name": "September", "short": "Sep", "utility": 28335, "small": 8126, "thermal": 257, "total": 36718, "wind": 26046, "total2024": 28049},
+    {"name": "October",   "short": "Oct", "utility": 24867, "small": 7544, "thermal": 234, "total": 32645, "wind": 39518, "total2024": 26564},
+    {"name": "November",  "short": "Nov", "utility": 18457, "small": 5955, "thermal": 130, "total": 24542, "wind": 40138, "total2024": 19234},
+    {"name": "December",  "short": "Dec", "utility": 15183, "small": 5538, "thermal": 116, "total": 20838, "wind": 46497, "total2024": 17585}
+  ]
+}
