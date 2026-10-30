@@ -302,21 +302,21 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `tests/fixtures/fake-swiftc.sh`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] implement subcommand dispatch and usage (unknown subcommand → exit 2)
-- [ ] implement `check`: macOS (`uname`), `xcrun --find swiftc` (skipped
+- [x] implement subcommand dispatch and usage (unknown subcommand → exit 2)
+- [x] implement `check`: macOS (`uname`), `xcrun --find swiftc` (skipped
       when `HTML_POPUP_SWIFTC` is set), `jq`, writable cache dir, Aqua
       session; one clear message and exit 2 per missing piece
-- [ ] implement `build`: sha256 cache key, compile to `.tmp.$$` then `mv`,
+- [x] implement `build`: sha256 cache key, compile to `.tmp.$$` then `mv`,
       reuse when present, print the path
-- [ ] create `fake-swiftc.sh` (writes an executable stub to `-o`, appends to
+- [x] create `fake-swiftc.sh` (writes an executable stub to `-o`, appends to
       a call-count file)
-- [ ] run `shellcheck` on the wrapper and fixture
-- [ ] write tests: build compiles once and reuses; a changed source hash
+- [x] run `shellcheck` on the wrapper and fixture
+- [x] write tests: build compiles once and reuses; a changed source hash
       rebuilds; two concurrent builds both succeed and leave one binary
-- [ ] write tests for errors: `jq` missing (PATH without jq, via a temp bin
+- [x] write tests for errors: `jq` missing (PATH without jq, via a temp bin
       dir of symlinks) → exit 2 with message; unwritable cache dir → exit 2;
       compiler failure (fake exits 1) → exit 2 and no binary left behind
-- [ ] run tests — must pass before task 3
+- [x] run tests — must pass before task 3
 
 ### Task 3: Viewer — native window, session files and startup
 
