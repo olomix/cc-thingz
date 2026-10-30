@@ -8,6 +8,8 @@
 #   FAKE_SWIFTC_FAIL=1     write a partial output, then exit 1
 #   FAKE_SWIFTC_BODY=SH    bash code for the stub (default: exit 0), so
 #                          wrapper tests can run a scripted fake viewer
+#   FAKE_SWIFTC_EXEC_DELAY=SEC  stub sleeps before taking the viewer name,
+#                          like a viewer slow to exec
 set -euo pipefail
 
 out=""
@@ -40,6 +42,7 @@ fi
 cat >"$out" <<EOF
 #!/bin/bash
 if [[ -z "\${FAKE_VIEWER_NAMED:-}" ]]; then
+  sleep ${FAKE_SWIFTC_EXEC_DELAY:-0}
   FAKE_VIEWER_NAMED=1 exec -a "\$0" /bin/bash "\$0" "\$@"
 fi
 idle() { local i; for ((i = 0; i < \$1 * 5; i++)); do sleep 0.2; done; }

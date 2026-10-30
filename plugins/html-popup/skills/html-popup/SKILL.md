@@ -68,8 +68,9 @@ or contenteditable elements, or when a page listener calls
 `opts`: `--data FILE`, `--title TEXT` (default: page `<title>`),
 `--size WxH` (default 980x640), `--timeout SEC` (window lifetime; default:
 open until closed). `--wait` = how long this call blocks, counted from its
-start (first-use compile and page load included), whole seconds, default
-100 (below the Bash tool's 120 s timeout). Concurrent `live send` calls to
+start (page load included; exit 4 may come while the page still loads),
+whole seconds, default 100 (below the Bash tool's 120 s timeout). The
+first-use compile is not bounded by it: run `"$P" build` once up front. Concurrent `live send` calls to
 one window are serialized.
 
 ## Flows
@@ -121,7 +122,8 @@ what it already printed (`DIR/cursor`).
 ## Requirements and errors
 
 - macOS with a GUI session, Xcode Command Line Tools (`swiftc`) and `jq`.
-  First use compiles the viewer (a few seconds) into
+  First use compiles the viewer (several seconds; `"$P" build` does it
+  ahead of time) into
   `${CLAUDE_PLUGIN_DATA:-~/Library/Caches/html-popup}`; later uses reuse it.
 - On any exit 2, or a window that never appears, run `"$P" check` first.
 - Sandboxed Bash may block the cache dir or the window server; if `check`

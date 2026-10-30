@@ -147,7 +147,9 @@ html-popup-viewer PAGE.html --session DIR [--data FILE] [--title TEXT]
   `timeout`, `error` — load failure, invalid `--data`, crashed web content
   process), then exits. A viewer killed by a signal writes nothing; the
   wrapper writes the `closed` event for viewers it terminates itself.
-- Page posts that are not one-line JSON values are logged and dropped.
+- Page posts that are not strict one-line JSON values (trailing commas and
+  a leading BOM included) are logged and dropped. Wrapper readers skip
+  `events.jsonl` lines that are not JSON objects with a numeric `seq`.
   Inbound messages that arrive before `ready` are logged and dropped (the
   wrapper hands out DIR only after `ready`).
 - Exit codes: 0 normal close (any reason except below), 3 page failed to load
@@ -207,7 +209,10 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   `reason: error` → exit 3 with the last lines of `viewer.log`; another
   `closed` (e.g. an early answer) → `ask` reads it, `show`/`live start` exit
   1; viewer gone without events → exit 5 with the log tail; not ready in
-  10 s → terminate it, write `closed`/`error`, exit 3.
+  10 s → terminate it, write `closed`/`error`, exit 3. `ask` bounds the
+  ready wait by its remaining `--wait` and then exits 4 with the resume
+  hint; the 10 s deadline is kept in `DIR/ready_by` and enforced by
+  `ask --resume` too. The compile itself is not bounded.
 - **`ask`**: wait for an `answer` or `closed` event. `answer` → print `data`
   as one JSON line, exit 0. `closed` without answer → exit 1, including a
   window `--timeout` (`window timed out without an answer`); `closed` with
@@ -219,8 +224,8 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   `ps -o args=` holds `--session DIR` for this session's DIR (compared with
   `-ef`). A viewer that died without `closed` may have its pid recycled, by
   an unrelated process or another session's viewer; such a pid is treated
-  as dead and never signalled. Startup polls plain `kill -0`, since
-  the fresh child is a bash subshell until it execs the viewer.
+  as dead and never signalled. Startup first waits (up to 5 s) until the
+  fresh child, a bash subshell until it execs, is the viewer or gone.
 - **`live send`**: validate with `jq -c` (exit 2 if it is not exactly one
   JSON value); if the session has a `closed` event or a dead pid → exit 1;
   otherwise a background writer process takes the per-session send lock and
@@ -245,7 +250,9 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   - Prints the new events and exits 0 if they contain no `closed`.
   - Exits 1 if the printed batch contains `closed`, or `closed` was already
     consumed (returns at once).
-  - Exits 5 if the pid is dead and no `closed` was written (viewer crashed).
+  - Exits 5 if the pid is dead and no `closed` was written (viewer crashed),
+    unless a live process holds the close lock (a forced close): then it
+    waits up to 5 s for that `closed` (same for `ask`).
   - Before exiting 1 or 5 it reads new events once more, so events written
     just before `closed` are always printed.
   - Exits 4 when `--wait` expires with nothing new.
@@ -253,9 +260,13 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   lock or the write stays blocked), wait up to 5 s for `closed`; if it
   does not come, SIGTERM the viewer (SIGKILL after 5 s more) and append the
   `closed` event (`reason: agent`) itself. Concurrent closes serialize that
-  append with `mkdir DIR/close.lock` (never removed): the winner appends one
-  `closed`, the others wait up to 5 s for it. Exit 0, also when the viewer was
-  already gone. Keeps `events.jsonl` for reading.
+  kill and append with a lock (`DIR/close.lock.N` → owner pid, never
+  removed), taken before the kill so waiters can tell a forced close from a
+  crash: the owner appends one `closed`, the others wait up to 5 s for it.
+  An owner killed before appending is taken over by linking N+1 for the
+  same N read once and found dead (one winner, the send lock's helper); a
+  later close finishes it even if the viewer is gone. Exit 0,
+  also when the viewer was already gone. Keeps `events.jsonl` for reading.
 - **Build cache**: `${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}`,
   binary `html-popup-viewer-<12 hex of sha256>`; compile to
   `<bin>.tmp.$$`, then `mv` into place (safe under concurrent first use).

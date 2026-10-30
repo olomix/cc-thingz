@@ -660,10 +660,11 @@ test_bridge_raw_posts() {
   local log
   run_bridge bridge-raw.js
   assert_eq "direct posts exit 0" "0" "$RC"
-  assert_eq "only one-line JSON values become events" \
+  assert_eq "only strict one-line JSON values become events" \
     '{"seq":2,"type":"message","data":null}
 {"seq":3,"type":"message","data":{"a":1}}
-{"seq":4,"type":"closed","reason":"cancel"}' "$(sed -n '2,$p' "$EVENTS")"
+{"seq":4,"type":"message","data":{"b":"x,}"}}
+{"seq":5,"type":"closed","reason":"cancel"}' "$(sed -n '2,$p' "$EVENTS")"
   log="$(cat "$SESSION/viewer.log")"
   assert "multi-line and non-JSON values are logged" \
     contains "dropped send with a value that is not one-line JSON" "$log"
@@ -1479,6 +1480,49 @@ test_wrapper_close_stuck() {
   assert_eq "wait after a forced close exits 1, not 5" "1" "$RC"
 }
 
+# A malformed line in events.jsonl (a fragment cut by a forced kill) is
+# skipped: wait, resume and close still see the valid events around it.
+test_wrapper_malformed_events() {
+  skip_unless_macos "malformed event lines" || return 0
+  new_tmpdir WRAP_TMP
+  local session bad='{"seq":2,"type":"message","data":{"a":1,}}'
+
+  fake_session session live '{"seq":1,"type":"ready"}' "$bad" \
+    '{"seq":3,"type":"message","data":"after"}'
+  wrap - live wait "$session" --wait 0
+  assert_eq "live wait past a malformed line exits 0" "0" "$RC"
+  assert_eq "live wait skips the malformed line" \
+    $'{"seq":1,"type":"ready"}\n{"seq":3,"type":"message","data":"after"}' \
+    "$OUT"
+  printf '{"seq":4,"type":"message","data":"later"}\n' \
+    >>"$session/events.jsonl"
+  wrap - live wait "$session" --wait 0
+  assert_eq "next live wait sees the later event" \
+    '{"seq":4,"type":"message","data":"later"}' "$OUT"
+
+  fake_session session live '{"seq":1,"type":"ready"}' "$bad" \
+    '{"seq":3,"type":"answer","data":{"month":7}}' \
+    '{"seq":4,"type":"closed","reason":"answer"}'
+  wrap - ask --resume "$session" --wait 0
+  assert_eq "resume past a malformed line exits 0" "0" "$RC"
+  assert_eq "resume past a malformed line prints the answer" \
+    '{"month":7}' "$OUT"
+
+  fake_session session live '{"seq":1,"type":"ready"}' "$bad"
+  printf '{"seq":3,"type":"mess' >>"$session/events.jsonl"
+  wrap - live close "$session"
+  assert_eq "close after a partial tail exits 0" "0" "$RC"
+  assert_eq "closed lands on its own line after the partial tail" \
+    '{"seq":2,"type":"closed","reason":"agent"}' \
+    "$(tail -n 1 "$session/events.jsonl")"
+  assert_eq "partial tail is kept on its own line" '{"seq":3,"type":"mess' \
+    "$(tail -n 2 "$session/events.jsonl" | head -n 1)"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait after the forced close exits 1" "1" "$RC"
+  assert "wait after the forced close reports closed" \
+    contains '"type":"closed"' "$OUT"
+}
+
 # Two closes terminating the same stuck viewer append one closed event; a
 # slow tail holds each between its closed check and its append.
 test_wrapper_concurrent_close() {
@@ -1504,6 +1548,203 @@ EOF
   assert_eq "concurrent closes append one closed event" \
     $'{"seq":1,"type":"ready"}\n{"seq":2,"type":"closed","reason":"agent"}' \
     "$(grep . "$session/events.jsonl")"
+}
+
+# Waiters that find the viewer killed by a forced close before its closed
+# event is appended wait for that event instead of reporting a crash; a slow
+# tail holds the close between the kill and the append.
+test_wrapper_wait_forced_close() {
+  skip_unless_macos "wait during a forced close" || return 0
+  new_tmpdir WRAP_TMP
+  local session shim="$WRAP_TMP/shim" real closer asker pid tries=150
+  real="$(command -v tail)"
+  fake_session session live '{"seq":1,"type":"ready"}'
+  printf '1\n' >"$session/cursor"
+  pid="$(session_pid_of "$session")"
+  mkdir "$shim"
+  cat >"$shim/tail" <<EOF
+#!/bin/bash
+sleep 3
+exec "$real" "\$@"
+EOF
+  chmod +x "$shim/tail"
+  env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" live close \
+    "$session" >/dev/null 2>&1 &
+  closer=$!
+  while ((tries-- > 0)) && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.1
+  done
+  assert "forced close killed the viewer" \
+    sh -c "! kill -0 $pid 2>/dev/null"
+  assert "closed event is not appended yet" \
+    not_contains closed "$(cat "$session/events.jsonl")"
+  env TMPDIR="$WRAP_TMP" "$WRAPPER" ask --resume "$session" --wait 10 \
+    >/dev/null 2>&1 &
+  asker=$!
+  wrap - live wait "$session" --wait 10
+  assert_eq "live wait during a forced close exits 1, not 5" "1" "$RC"
+  assert_eq "live wait prints the forced closed event" \
+    '{"seq":2,"type":"closed","reason":"agent"}' "$OUT"
+  RC=0
+  wait "$asker" || RC=$?
+  assert_eq "ask --resume during a forced close exits 1, not 5" "1" "$RC"
+  assert "forced close exits 0" wait "$closer"
+}
+
+# ask --wait bounds the wait for ready: a slow page gets exit 4 with a
+# resumable session; a page that never gets ready still fails on resume.
+test_wrapper_ask_budget() {
+  skip_unless_macos "ask --wait bounds startup" || return 0
+  new_tmpdir WRAP_TMP
+  local page="$FIXTURES/basic.html" start session pid
+  # shellcheck disable=SC2016 # stub shell code, expanded by the stub
+  local head='DIR=$3; ev() { printf "%s\n" "$1" >>"$DIR/events.jsonl"; }'
+  local ready='{"seq":1,"type":"ready"}'
+  local answer='{"seq":2,"type":"answer","data":5}'
+  local answered='{"seq":3,"type":"closed","reason":"answer"}'
+
+  start=$SECONDS
+  stub_wrap "$head; idle 3; ev '$ready'; ev '$answer'; ev '$answered'" \
+    ask "$page" --wait 1
+  assert_eq "ask --wait 1 on a slow page exits 4" "4" "$RC"
+  assert "slow page wait is bounded by --wait" \
+    test $((SECONDS - start)) -le 3
+  assert "slow page gets a resume hint" contains "ask --resume" "$ERR"
+  session="${ERR##*--resume }"
+  track_pid "$(session_pid_of "$session")"
+  wrap - ask --resume "$session" --wait 10
+  assert_eq "resume after a slow page exits 0" "0" "$RC"
+  assert_eq "resume after a slow page prints the answer" "5" "$OUT"
+
+  stub_wrap 'idle 60' ask "$page" --wait 1
+  assert_eq "ask --wait 1 on a never-ready page exits 4" "4" "$RC"
+  session="${ERR##*--resume }"
+  pid="$(session_pid_of "$session")"
+  track_pid "$pid"
+  # Skip the 10 s ready deadline instead of sleeping through it.
+  printf '%s\n' "$(($(date +%s) - 1))" >"$session/ready_by"
+  wrap - ask --resume "$session" --wait 10
+  assert_eq "resume of a never-ready page exits 3" "3" "$RC"
+  assert "never-ready resume is reported" contains "page not ready" "$ERR"
+  assert "never-ready viewer is killed" sh -c "! kill -0 $pid 2>/dev/null"
+  assert_eq "never-ready resume writes closed/error" "error" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
+
+  # --wait may run out before the child has exec'd the viewer.
+  FAKE_SWIFTC_EXEC_DELAY=2 stub_wrap 'idle 60' ask "$page" --wait 1
+  assert_eq "ask --wait 1 on a viewer slow to exec exits 4, not 5" "4" "$RC"
+  assert "slow exec gets a resume hint" contains "ask --resume" "$ERR"
+  session="${ERR##*--resume }"
+  pid="$(session_pid_of "$session")"
+  track_pid "$pid"
+  wrap - ask --resume "$session" --wait 0
+  assert_eq "resume after a slow exec exits 4" "4" "$RC"
+  kill "$pid"
+}
+
+# A forced close whose owner was killed before appending closed is finished
+# by the next close, whether the owner died before or after its kill.
+test_wrapper_close_owner_killed() {
+  skip_unless_macos "close after a killed close owner" || return 0
+  new_tmpdir WRAP_TMP
+  local session pid shim="$WRAP_TMP/shim" closer tries=100
+  local closed='{"seq":2,"type":"closed","reason":"agent"}'
+
+  fake_session session live '{"seq":1,"type":"ready"}'
+  pid="$(session_pid_of "$session")"
+  ln -s "$(dead_pid)" "$session/close.lock.1"
+  wrap - live close "$session"
+  assert_eq "close after a dead owner's lock exits 0" "0" "$RC"
+  assert "close after a dead owner's lock kills the viewer" \
+    sh -c "! kill -0 $pid 2>/dev/null"
+  assert_eq "close after a dead owner's lock appends one closed" \
+    $'{"seq":1,"type":"ready"}\n'"$closed" "$(grep . "$session/events.jsonl")"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait after the taken-over close exits 1" "1" "$RC"
+
+  # The tail before the append parks the first close, which is then killed.
+  fake_session session live '{"seq":1,"type":"ready"}'
+  pid="$(session_pid_of "$session")"
+  mkdir "$shim"
+  cat >"$shim/tail" <<EOF
+#!/bin/bash
+printf '%s\n' "\$\$" >"$shim/pid"
+exec sleep 30
+EOF
+  chmod +x "$shim/tail"
+  env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" live close \
+    "$session" >/dev/null 2>&1 &
+  closer=$!
+  while ((tries-- > 0)) && [[ ! -s "$shim/pid" ]]; do
+    sleep 0.2
+  done
+  assert "first close reached the append" test -s "$shim/pid"
+  kill -9 "$closer"
+  wait "$closer" 2>/dev/null || true
+  kill "$(cat "$shim/pid")"
+  assert "first close killed the viewer" sh -c "! kill -0 $pid 2>/dev/null"
+  assert "killed close appended nothing" \
+    not_contains closed "$(cat "$session/events.jsonl")"
+  printf '1\n' >"$session/cursor"
+  wrap - live wait "$session" --wait 10
+  assert_eq "wait with a dead close owner reports a crash" "5" "$RC"
+  wrap - live close "$session"
+  assert_eq "close after a killed close owner exits 0" "0" "$RC"
+  assert_eq "close after a killed close owner appends one closed" \
+    $'{"seq":1,"type":"ready"}\n'"$closed" "$(grep . "$session/events.jsonl")"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait after the finished close exits 1" "1" "$RC"
+}
+
+# A close that found the close lock's owner dead must not take a lock beside
+# a close that took over meanwhile. Shims park the first close after its
+# owner readlink and the second (now the owner) before its append.
+test_wrapper_close_lock_takeover_race() {
+  skip_unless_macos "close lock takeover race" || return 0
+  new_tmpdir WRAP_TMP
+  local session shim="$WRAP_TMP/shim" first second tries=50 cmd
+  fake_session session "$(dead_pid)" '{"seq":1,"type":"ready"}'
+  ln -s "$(dead_pid)" "$session/close.lock.1"
+  mkdir "$shim"
+  for cmd in readlink tail; do
+    cat >"$shim/$cmd" <<EOF
+#!/bin/bash
+"$(command -v "$cmd")" "\$@"
+rc=\$?
+if mkdir "$shim/$cmd.parked" 2>/dev/null; then
+  while [[ ! -e "$shim/$cmd.go" ]]; do sleep 0.05; done
+fi
+exit \$rc
+EOF
+    chmod +x "$shim/$cmd"
+  done
+  env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" live close \
+    "$session" >/dev/null 2>&1 &
+  first=$!
+  while ((tries-- > 0)) && [[ ! -e "$shim/readlink.parked" ]]; do
+    sleep 0.1
+  done
+  assert "first close parked after its owner check" \
+    test -e "$shim/readlink.parked"
+  env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" live close \
+    "$session" >/dev/null 2>&1 &
+  second=$!
+  tries=50
+  while ((tries-- > 0)) && [[ ! -e "$shim/tail.parked" ]]; do
+    sleep 0.1
+  done
+  assert "second close parked holding the lock" test -e "$shim/tail.parked"
+  touch "$shim/readlink.go"
+  sleep 0.5
+  touch "$shim/tail.go"
+  assert "first racing close exits 0" wait "$first"
+  assert "second racing close exits 0" wait "$second"
+  assert_eq "racing closes append one closed event" \
+    $'{"seq":1,"type":"ready"}\n{"seq":2,"type":"closed","reason":"agent"}' \
+    "$(grep . "$session/events.jsonl")"
+  assert_eq "racing closes hold one lock beside the dead one" \
+    "close.lock.1 close.lock.2" \
+    "$(cd "$session" && printf '%s\n' close.lock.* | xargs)"
 }
 
 # stub_wrap <stub body> <args...> : run the wrapper with a fake viewer whose
@@ -1978,7 +2219,12 @@ main() {
   test_wrapper_wait_decimal
   test_wrapper_resume_outcomes
   test_wrapper_close_stuck
+  test_wrapper_malformed_events
   test_wrapper_concurrent_close
+  test_wrapper_wait_forced_close
+  test_wrapper_ask_budget
+  test_wrapper_close_owner_killed
+  test_wrapper_close_lock_takeover_race
   test_wrapper_startup
   test_wrapper_show
   test_wrapper_ask

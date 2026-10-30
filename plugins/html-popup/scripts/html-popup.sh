@@ -30,7 +30,7 @@ DEFAULT_WAIT=100
 READY_WAIT=10
 CLOSE_WAIT=5
 POLL=0.2
-# Short: a blocked FIFO write only waits for the viewer to read.
+# Short: a blocked FIFO write or a fresh viewer's exec take milliseconds.
 FIFO_POLL=0.05
 
 # xcrun picks the Xcode toolchain with the AppKit/WebKit SDK, not whatever
@@ -200,15 +200,19 @@ require_session() {
   [[ -f "$1/pid" ]] || die "not an html-popup session: $1"
 }
 
-# complete_events <dir> : print the newline-terminated lines of events.jsonl;
-# a line still being written is left for the next call.
+# complete_events <dir> : print the newline-terminated lines of events.jsonl
+# that are JSON objects with a numeric seq; a line still being written is
+# left for the next call. Malformed lines (a fragment cut by a forced kill)
+# are skipped so one bad line never stops wait, resume or close.
 complete_events() {
   local file="$1/events.jsonl" snapshot
   [[ -f "$file" ]] || return 0
   snapshot="$(cat "$file"; printf x)"
   snapshot="${snapshot%x}"
   [[ "$snapshot" == *$'\n'* ]] || return 0
-  printf '%s\n' "${snapshot%$'\n'*}"
+  printf '%s\n' "${snapshot%$'\n'*}" |
+    jq -R -r 'select(fromjson? |
+      type == "object" and (.seq | type) == "number")'
 }
 
 # has_event <dir> <type>... : true when a complete event of one of those
@@ -250,10 +254,59 @@ new_events() {
     2>/dev/null || true
 }
 
+# last_lock <prefix> : print the highest N of the lock links PREFIX.N, or 0.
+last_lock() {
+  local link n top=0
+  for link in "$1".*; do
+    n="${link##*.}"
+    if [[ "$n" =~ ^[1-9][0-9]*$ ]] && ((n > top)); then
+      top="$n"
+    fi
+  done
+  printf '%s' "$top"
+}
+
+# close_lock_held <dir> : true while a live process owns the close lock.
+close_lock_held() {
+  local top
+  top="$(last_lock "$1/close.lock")"
+  ((top > 0)) && pid_alive "$(readlink "$1/close.lock.$top")"
+}
+
+# take_lock <prefix> <owner> : link PREFIX.N+1 to OWNER and set LOCK_LINK
+# when PREFIX.N, the highest lock, is free: PREFIX.N.done exists or its owner
+# died. Lock links are never removed, so names are never reused. N is read
+# once: the link checked is the one superseded, and exactly one taker wins.
+take_lock() {
+  local top
+  top="$(last_lock "$1")"
+  if ((top > 0)) && [[ ! -e "$1.$top.done" ]] &&
+    pid_alive "$(readlink "$1.$top")"; then
+    return 1
+  fi
+  LOCK_LINK="$1.$((top + 1))"
+  ln -s "$2" "$LOCK_LINK" 2>/dev/null
+}
+
+# take_close_lock <dir> : true when this process now owns the close lock.
+# It is never released; a dead owner's lock is taken over (see take_lock).
+take_close_lock() {
+  take_lock "$1/close.lock" "$$"
+}
+
 # terminate_viewer <dir> <pid> <reason> [message] : kill a viewer that did
 # not close by itself and append the closed event it could not write.
+# Concurrent closes may all get here: only the lock owner kills and appends,
+# the others wait for its event and take over if it dies first. The lock is
+# taken before the kill, so waiters that see the viewer gone know a closed
+# event is coming (see await_forced_close).
 terminate_viewer() {
   local dir="$1" pid="$2" file="$1/events.jsonl" seq
+  local end=$((SECONDS + CLOSE_WAIT))
+  until take_close_lock "$dir"; do
+    await_forced_close "$dir" && return 0
+    ((SECONDS <= end)) || return 0
+  done
   if viewer_alive "$dir" "$pid"; then
     kill "$pid" 2>/dev/null || true
     deadline_start "$CLOSE_WAIT"
@@ -265,16 +318,7 @@ terminate_viewer() {
     fi
   fi
   has_event "$dir" closed && return 0
-  # Concurrent closes may all get here: only the mkdir winner appends, the
-  # others wait for its event. The lock dir is never removed.
-  if ! mkdir "$dir/close.lock" 2>/dev/null; then
-    deadline_start "$CLOSE_WAIT"
-    until has_event "$dir" closed || deadline_passed; do
-      sleep "$POLL"
-    done
-    return 0
-  fi
-  has_event "$dir" closed && return 0
+  # Cut off a fragment the killed viewer left so closed gets its own line.
   if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then
     printf '\n' >>"$file"
   fi
@@ -282,6 +326,43 @@ terminate_viewer() {
   jq -cn --argjson seq "$((seq + 1))" --arg reason "$3" --arg msg "${4:-}" \
     '{seq: $seq, type: "closed", reason: $reason}
       + if $msg == "" then {} else {message: $msg} end' >>"$file"
+}
+
+# await_forced_close <dir> : true once a closed event exists, waiting up to
+# CLOSE_WAIT for it while a live forced close holds the close lock.
+await_forced_close() {
+  local end=$((SECONDS + CLOSE_WAIT))
+  until has_event "$1" closed; do
+    if ! close_lock_held "$1"; then
+      has_event "$1" closed && return 0
+      return 1
+    fi
+    ((SECONDS > end)) && return 1
+    sleep "$POLL"
+  done
+}
+
+# await_exec <dir> <pid> : wait until the freshly spawned child has exec'd
+# the viewer (or died), so later checks never see the bash child instead.
+await_exec() {
+  deadline_start "$CLOSE_WAIT"
+  until viewer_alive "$1" "$2"; do
+    pid_alive "$2" || return 0
+    if deadline_passed; then
+      kill -9 "$2" 2>/dev/null || true
+      die "viewer did not start in ${CLOSE_WAIT}s; see $1/viewer.log" 5
+    fi
+    sleep "$FIFO_POLL"
+  done
+}
+
+# ready_overdue <dir> : true when the page missed the ready deadline set at
+# start; kept in DIR/ready_by so it also holds for ask --resume.
+ready_overdue() {
+  local by
+  by="$(cat "$1/ready_by" 2>/dev/null)" || return 1
+  [[ "$by" =~ ^[0-9]+$ ]] && (($(date +%s) > by)) &&
+    ! has_event "$1" ready
 }
 
 # remove_stale_sessions : drop session dirs older than a day whose viewer is
@@ -304,8 +385,10 @@ startup_failed() {
 # start_session <page> [opts...] : validate, build, start a detached viewer
 # and wait until the page is ready; sets SESSION_DIR. If the window closed
 # before that without an error (e.g. an early answer), sets EARLY_CLOSE=1.
+# With START_BUDGET set (the caller's --wait), returns once that runs out
+# even if the page is still loading.
 start_session() {
-  local page="" data="" bin pid closed
+  local page="" data="" bin pid closed ready_wait="$READY_WAIT" budgeted=0
   local -a viewer_args=()
   EARLY_CLOSE=0
   while (($# > 0)); do
@@ -354,6 +437,7 @@ start_session() {
 
   bin="$(build_viewer)" || exit 2
   SESSION_DIR="$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")"
+  printf '%s\n' "$(($(date +%s) + READY_WAIT))" >"$SESSION_DIR/ready_by"
 
   # Double fork: the subshell exits at once, so the viewer is reparented to
   # launchd and a caller that kills our process tree cannot reach it.
@@ -364,8 +448,14 @@ start_session() {
     printf '%s\n' "$!" >"$SESSION_DIR/pid"
   )
   pid="$(session_pid "$SESSION_DIR")"
+  await_exec "$SESSION_DIR" "$pid"
 
-  deadline_start "$READY_WAIT"
+  if [[ -n "${START_BUDGET:-}" ]] &&
+    ((START_BUDGET - SECONDS < READY_WAIT)); then
+    ready_wait=$((START_BUDGET > SECONDS ? START_BUDGET - SECONDS : 0))
+    budgeted=1
+  fi
+  deadline_start "$ready_wait"
   until has_event "$SESSION_DIR" ready; do
     closed="$(first_event "$SESSION_DIR" closed)"
     if [[ -n "$closed" ]]; then
@@ -373,12 +463,14 @@ start_session() {
       EARLY_CLOSE=1
       return 0
     fi
-    # Plain liveness: until exec, our fresh child is still a bash subshell.
-    if ! pid_alive "$pid"; then
-      has_event "$SESSION_DIR" ready closed || startup_failed 5
+    if ! viewer_alive "$SESSION_DIR" "$pid"; then
+      has_event "$SESSION_DIR" ready closed ||
+        await_forced_close "$SESSION_DIR" || startup_failed 5
       continue
     fi
     if deadline_passed; then
+      # The caller's wait ran out: it reports the open session (exit 4).
+      ((budgeted == 0)) || return 0
       terminate_viewer "$SESSION_DIR" "$pid" error \
         "page not ready after ${READY_WAIT}s"
       die "page not ready after ${READY_WAIT}s; see $SESSION_DIR/viewer.log" 3
@@ -418,7 +510,12 @@ wait_answer() {
     fi
     if ! viewer_alive "$dir" "$pid"; then
       has_event "$dir" answer closed && continue
+      await_forced_close "$dir" && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
+    fi
+    if ready_overdue "$dir"; then
+      terminate_viewer "$dir" "$pid" error "page not ready after ${READY_WAIT}s"
+      die "page not ready after ${READY_WAIT}s; see $dir/viewer.log" 3
     fi
     if deadline_passed; then
       printf 'html-popup: still waiting; resume with: %s\n' \
@@ -462,42 +559,29 @@ cmd_ask() {
     require_jq
     require_session "$dir"
   else
+    START_BUDGET="$wait"
     start_session "${args[@]+"${args[@]}"}"
     dir="$SESSION_DIR"
   fi
-  # --wait counts from the start of this call, so a first-use compile and the
-  # page load cannot push it past the Bash tool's timeout.
+  # --wait counts from the start of this call, so the page load cannot push
+  # it past the Bash tool's timeout. A first-use compile still can.
   wait_answer "$dir" "$((wait > SECONDS ? wait - SECONDS : 0))"
 }
 
 # lock_inbound <dir> <pid> : take the session's send lock for the calling
 # writer process and set INBOUND_LOCK; returns 1 if the viewer dies first.
 # Pipe writes over PIPE_BUF are not atomic, so concurrent senders would
-# interleave long lines. Locks are symlinks in.lock.N to the owner's pid and
-# the highest N counts; N is free once in.lock.N.done exists or its owner
-# died. No lock file is ever removed, so names are never reused and takers
-# race on ln -s of N+1 with exactly one winner.
+# interleave long lines. Locks are symlinks in.lock.N to the owner's pid,
+# released by creating in.lock.N.done (see take_lock).
 lock_inbound() {
-  local dir="$1" me top n link
+  local dir="$1" me
   # $BASHPID needs bash 4; the background writer must name itself.
   me="$(exec sh -c 'printf %s "$PPID"')"
-  while :; do
-    top=0
-    for link in "$dir"/in.lock.*; do
-      n="${link##*.}"
-      if [[ "$n" =~ ^[1-9][0-9]*$ ]] && ((n > top)); then
-        top="$n"
-      fi
-    done
-    if ((top > 0)) && [[ ! -e "$dir/in.lock.$top.done" ]] &&
-      pid_alive "$(readlink "$dir/in.lock.$top")"; then
-      viewer_alive "$dir" "$2" || return 1
-      sleep "$FIFO_POLL"
-      continue
-    fi
-    INBOUND_LOCK="$dir/in.lock.$((top + 1))"
-    ln -s "$me" "$INBOUND_LOCK" 2>/dev/null && return 0
+  until take_lock "$dir/in.lock" "$me"; do
+    viewer_alive "$dir" "$2" || return 1
+    sleep "$FIFO_POLL"
   done
+  INBOUND_LOCK="$LOCK_LINK"
 }
 
 # send_line <dir> <pid> <line> : the background writer. It owns the send
@@ -601,6 +685,7 @@ cmd_live_wait() {
       # The last events may have landed after the batch was read.
       [[ -n "$(new_events "$dir" "$cursor")" ]] && continue
       has_event "$dir" closed && exit 1
+      await_forced_close "$dir" && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
     deadline_passed && exit 4
@@ -613,8 +698,13 @@ cmd_live_close() {
   local dir="$1" pid rc=0
   require_jq
   require_session "$dir"
-  session_over "$dir" && return 0
+  has_event "$dir" closed && return 0
   pid="$(session_pid "$dir")"
+  if ! viewer_alive "$dir" "$pid"; then
+    # Finish a forced close whose owner died before appending closed.
+    [[ ! -L "$dir/close.lock.1" ]] || terminate_viewer "$dir" "$pid" agent
+    return 0
+  fi
   # Bounded: a viewer that stopped reading must not hang close.
   write_inbound "$dir" '{"htmlPopup":"close"}' "$CLOSE_WAIT" || rc=$?
   ((rc == 1)) && return 0

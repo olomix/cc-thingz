@@ -608,10 +608,42 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private func eventData(_ value: Any?) -> String? {
         guard let text = value as? String,
             !text.utf8.contains(UInt8(ascii: "\n")),
+            !text.hasPrefix("\u{FEFF}"),
+            !hasTrailingComma(text),
             (try? JSONSerialization.jsonObject(
                 with: Data(text.utf8), options: .fragmentsAllowed)) != nil
         else { return nil }
         return text
+    }
+
+    // JSONSerialization accepts `[1,]` and `{"a":1,}`, which jq and
+    // JSON.parse reject; one such line would break readers of the log.
+    private func hasTrailingComma(_ text: String) -> Bool {
+        var inString = false, escaped = false, afterComma = false
+        for byte in text.utf8 {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if byte == UInt8(ascii: "\\") {
+                    escaped = true
+                } else if byte == UInt8(ascii: "\"") {
+                    inString = false
+                }
+                continue
+            }
+            switch byte {
+            case UInt8(ascii: " "), UInt8(ascii: "\t"), UInt8(ascii: "\r"):
+                continue
+            case UInt8(ascii: "}"), UInt8(ascii: "]"):
+                if afterComma { return true }
+            case UInt8(ascii: "\""):
+                inString = true
+            default:
+                break
+            }
+            afterComma = byte == UInt8(ascii: ",")
+        }
+        return false
     }
 
     private func runTestScript(in webView: WKWebView) {
