@@ -30,8 +30,8 @@ struct Options {
     var testScript: String?
 }
 
-enum UsageError: Error {
-    case message(String)
+struct ViewerError: Error {
+    let message: String
 }
 
 let usage = """
@@ -59,7 +59,7 @@ func parseOptions(_ args: [String]) throws -> Options {
     var rest = args[...]
     func value(for flag: String) throws -> String {
         guard let next = rest.popFirst() else {
-            throw UsageError.message("\(flag) needs a value")
+            throw ViewerError(message: "\(flag) needs a value")
         }
         return next
     }
@@ -73,28 +73,28 @@ func parseOptions(_ args: [String]) throws -> Options {
         case "--size":
             let text = try value(for: arg)
             guard let parsed = parseSize(text) else {
-                throw UsageError.message("bad --size: \(text)")
+                throw ViewerError(message: "bad --size: \(text)")
             }
             size = parsed
         case "--timeout":
             let text = try value(for: arg)
             guard let seconds = Double(text), seconds > 0 else {
-                throw UsageError.message("bad --timeout: \(text)")
+                throw ViewerError(message: "bad --timeout: \(text)")
             }
             timeout = seconds
         default:
             if arg.hasPrefix("--") {
-                throw UsageError.message("unknown option: \(arg)")
+                throw ViewerError(message: "unknown option: \(arg)")
             }
             if page != nil {
-                throw UsageError.message("unexpected argument: \(arg)")
+                throw ViewerError(message: "unexpected argument: \(arg)")
             }
             page = arg
         }
     }
 
-    guard let page else { throw UsageError.message("missing PAGE") }
-    guard let session else { throw UsageError.message("missing --session") }
+    guard let page else { throw ViewerError(message: "missing PAGE") }
+    guard let session else { throw ViewerError(message: "missing --session") }
     var options = Options(page: page, session: session)
     options.data = data
     options.title = title
@@ -139,7 +139,7 @@ final class EventLog {
     init(path: String) throws {
         fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0o644)
         guard fd >= 0 else {
-            throw UsageError.message("cannot open \(path): \(errnoText())")
+            throw ViewerError(message: "cannot open \(path): \(errnoText())")
         }
     }
 
@@ -169,13 +169,8 @@ final class EventLog {
     }
 }
 
-struct Session {
-    let events: EventLog
-    let inbound: Int32
-}
-
 // Prepare the session dir: own session, log, FIFO, pid file, events.
-func startSession(_ dir: String) throws -> Session {
+func startSession(_ dir: String) throws -> (events: EventLog, inbound: Int32) {
     // Leave the caller's process group so a killed agent shell or a Ctrl-C
     // in it does not take the window down. Fails harmlessly if we already
     // lead a group.
@@ -186,21 +181,21 @@ func startSession(_ dir: String) throws -> Session {
 
     let logPath = dir + "/viewer.log"
     if freopen(logPath, "a", stderr) == nil {
-        throw UsageError.message("cannot open \(logPath): \(errnoText())")
+        throw ViewerError(message: "cannot open \(logPath): \(errnoText())")
     }
 
     let fifo = dir + "/in"
     if mkfifo(fifo, 0o600) != 0 && errno != EEXIST {
-        throw UsageError.message("cannot create \(fifo): \(errnoText())")
+        throw ViewerError(message: "cannot create \(fifo): \(errnoText())")
     }
     // Read-write, so the open does not block waiting for a writer and reads
     // never hit EOF when a writer goes away.
     let inbound = open(fifo, O_RDWR)
     guard inbound >= 0 else {
-        throw UsageError.message("cannot open \(fifo): \(errnoText())")
+        throw ViewerError(message: "cannot open \(fifo): \(errnoText())")
     }
     try "\(getpid())\n".write(toFile: dir + "/pid", atomically: true, encoding: .utf8)
-    return Session(events: try EventLog(path: dir + "/events.jsonl"), inbound: inbound)
+    return (try EventLog(path: dir + "/events.jsonl"), inbound)
 }
 
 // Reads DIR/in on a background thread and hands each complete line to
@@ -252,17 +247,19 @@ func parseInbound(_ line: Data) -> Inbound? {
 }
 
 // Read and validate --data. Returns the JSON text, kept as-is so numbers
-// reach the page exactly as written.
+// reach the page exactly as written. The page's JSON.parse takes only
+// UTF-8 text without a BOM, though JSONSerialization also accepts UTF-16/32.
 func loadData(_ path: String) throws -> String {
-    guard let bytes = FileManager.default.contents(atPath: path) else {
-        throw UsageError.message("data file not found or not readable: \(path)")
+    guard var bytes = FileManager.default.contents(atPath: path) else {
+        throw ViewerError(message: "data file not found or not readable: \(path)")
     }
-    do {
-        _ = try JSONSerialization.jsonObject(with: bytes, options: .fragmentsAllowed)
-    } catch {
-        throw UsageError.message("data file is not valid JSON: \(path)")
+    if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { bytes.removeFirst(3) }
+    guard let text = String(data: bytes, encoding: .utf8),
+        (try? JSONSerialization.jsonObject(with: bytes, options: .fragmentsAllowed)) != nil
+    else {
+        throw ViewerError(message: "data file is not valid JSON (UTF-8 expected): \(path)")
     }
-    return String(decoding: bytes, as: UTF8.self)
+    return text
 }
 
 let messageHandlerName = "htmlPopup"
@@ -298,10 +295,13 @@ func bridgeSource(dataJSON: String?) -> String {
 
           const editable = (el) => !!el && (el.isContentEditable ||
             ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+          // Decide after dispatch ends, so page listeners added later on
+          // document or window can still call preventDefault().
           document.addEventListener("keydown", (event) => {
-            if (event.key !== "Escape" || event.defaultPrevented) return;
-            if (!popup.closeOnEscape || editable(document.activeElement)) return;
-            post("escape");
+            if (event.key !== "Escape" || editable(document.activeElement)) return;
+            setTimeout(() => {
+              if (!event.defaultPrevented && popup.closeOnEscape) post("escape");
+            }, 0);
           });
         })();
         """
@@ -325,8 +325,6 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var window: NSWindow?
     private var webView: WKWebView?
     private var isReady = false
-    // Inbound messages that arrived before the page finished loading.
-    private var queued: [String] = []
 
     private var testMode: Bool { options.testScript != nil }
 
@@ -451,8 +449,6 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         guard !isReady else { return }
         isReady = true
         events.append("ready")
-        queued.forEach(deliverToPage)
-        queued.removeAll()
         runTestScript(in: webView)
     }
 
@@ -461,7 +457,12 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         case .close?:
             events.close(.agent)
         case .message(let text)?:
-            if isReady { deliverToPage(text) } else { queued.append(text) }
+            // The wrapper prints DIR only after ready, so no flow sends earlier.
+            if isReady {
+                deliverToPage(text)
+            } else {
+                log("dropped inbound message that arrived before ready")
+            }
         case nil:
             break
         }
@@ -484,6 +485,11 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!,
                  withError error: Error) {
         navigationFailed(error)
+    }
+
+    // Without this the window would go blank and never report a close.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        events.close(.error, message: "web content process terminated")
     }
 
     private func navigationFailed(_ error: Error) {
@@ -538,7 +544,7 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         switch type {
         case "send", "answer":
             guard let value = eventData(body["value"]) else {
-                log("dropped \(type) with a value that is not JSON")
+                log("dropped \(type) with a value that is not one-line JSON")
                 return
             }
             if type == "send" {
@@ -556,17 +562,15 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
     }
 
-    // The bridge sends JSON.stringify output; pages can also post directly,
-    // so check it is JSON and fits on one event line.
+    // The bridge sends single-line JSON.stringify output. Pages can also
+    // post directly, so reject anything that is not JSON on one line. Only
+    // a raw "\n" splits an event line; U+2028 and friends are fine.
     private func eventData(_ value: Any?) -> String? {
-        guard let text = value as? String,
-            let object = try? JSONSerialization.jsonObject(
-                with: Data(text.utf8), options: .fragmentsAllowed)
+        guard let text = value as? String, !text.utf8.contains(UInt8(ascii: "\n")),
+            (try? JSONSerialization.jsonObject(
+                with: Data(text.utf8), options: .fragmentsAllowed)) != nil
         else { return nil }
-        if !text.contains(where: \.isNewline) { return text }
-        let compact = try? JSONSerialization.data(
-            withJSONObject: object, options: [.fragmentsAllowed, .withoutEscapingSlashes])
-        return compact.flatMap { String(data: $0, encoding: .utf8) }
+        return text
     }
 
     private func runTestScript(in webView: WKWebView) {
@@ -584,16 +588,16 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
 let options: Options
 do {
     options = try parseOptions(Array(CommandLine.arguments.dropFirst()))
-} catch UsageError.message(let text) {
-    log("\(text)\n\(usage)")
+} catch let error as ViewerError {
+    log("\(error.message)\n\(usage)")
     exit(2)
 }
 
-let session: Session
+let session: (events: EventLog, inbound: Int32)
 do {
     session = try startSession(options.session)
-} catch UsageError.message(let text) {
-    log(text)
+} catch let error as ViewerError {
+    log(error.message)
     exit(2)
 } catch {
     log("cannot set up session: \(error.localizedDescription)")
@@ -610,8 +614,8 @@ var dataJSON: String?
 if let dataPath = options.data {
     do {
         dataJSON = try loadData(dataPath)
-    } catch UsageError.message(let text) {
-        events.close(.error, message: text)
+    } catch let error as ViewerError {
+        events.close(.error, message: error.message)
     }
 }
 

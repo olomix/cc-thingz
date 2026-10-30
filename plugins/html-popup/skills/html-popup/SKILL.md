@@ -52,7 +52,7 @@ The template's Return key answers `{"ok":true}`.
 ## Commands
 
 ```
-"$P" show PAGE [opts]                # open, return at once, print DIR
+"$P" show PAGE [opts]                # open, wait until loaded, print DIR
 "$P" ask PAGE [opts] [--wait SEC]    # print the answer as one JSON line
 "$P" ask --resume DIR [--wait SEC]   # keep waiting on an earlier ask
 "$P" live start PAGE [opts]          # open, wait for ready, print DIR
@@ -64,8 +64,9 @@ The template's Return key answers `{"ok":true}`.
 
 `opts`: `--data FILE`, `--title TEXT` (default: page `<title>`),
 `--size WxH` (default 980x640), `--timeout SEC` (window lifetime; default:
-open until closed). `--wait` = how long this call blocks, whole seconds,
-default 100 (below the Bash tool's 120 s timeout).
+open until closed). `--wait` = how long this call blocks, counted from its
+start (first-use compile and page load included), whole seconds, default
+100 (below the Bash tool's 120 s timeout).
 
 ## Flows
 
@@ -73,9 +74,9 @@ default 100 (below the Bash tool's 120 s timeout).
 # show
 "$P" show "$dir/report.html" --data "$dir/data.json"
 
-# ask; on exit 4 the window is still open, so call again
+# ask; exit 4 = window still open, stderr says: still waiting; resume with: ...
 ans=$("$P" ask "$dir/pick.html" --data "$dir/data.json"); jq -r .month <<<"$ans"
-"$P" ask --resume "$session"     # session DIR is in the exit-4 stderr line
+"$P" ask --resume "$session"     # session DIR is in that stderr line
 
 # live
 s=$("$P" live start "$dir/page.html" --data "$dir/data.json")
@@ -87,7 +88,7 @@ s=$("$P" live start "$dir/page.html" --data "$dir/data.json")
 Events (`DIR/events.jsonl`, one per line, `seq` from 1):
 `ready`; `message` with `data`; `answer` with `data`; then exactly one
 `closed` with `reason`: `answer`, `cancel`, `user` (close button, Cmd-W,
-Esc), `agent`, `timeout` or `error` (+ `message`). `live wait` remembers
+Cmd-Q, Esc), `agent`, `timeout` or `error` (+ `message`). `live wait` remembers
 what it already printed (`DIR/cursor`).
 
 ## Exit codes
@@ -95,15 +96,18 @@ what it already printed (`DIR/cursor`).
 | Code | Meaning |
 |------|---------|
 | 0 | ok / answered / new events |
-| 1 | window closed (no answer for `ask`; session over for `wait`/`send`) |
-| 2 | usage error, missing dependency, build failure, not a session DIR |
+| 1 | window closed (no answer for `ask`, also on window `--timeout`; session over for `wait`/`send`) |
+| 2 | usage error (incl. bad `--size`/`--timeout`, `live send` text that is not exactly one JSON value), missing dependency, build failure, not a session DIR |
 | 3 | page or data invalid, page failed to load or not ready in 10 s |
-| 4 | `--wait` expired (window still open: call again) / `--timeout` hit |
+| 4 | `--wait` expired; the window is still open: call again |
 | 5 | viewer died without a `closed` event (see `DIR/viewer.log`) |
 
 ## Waiting for a human
 
-- Exit 4 from `ask`/`live wait` is normal: just call again.
+- Exit 4 from `ask`/`live wait` is normal and always means the window is
+  still open: call again. A window `--timeout` is not exit 4: `ask` exits 1
+  (`window timed out without an answer`), `live wait` prints a `closed`
+  event with `reason` `timeout` and exits 1.
 - For long think time, watch `DIR/events.jsonl` with the Monitor tool, or
   run `live wait`/`ask --resume` with the Bash tool's `run_in_background`,
   instead of polling in a loop.

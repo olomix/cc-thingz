@@ -109,8 +109,10 @@
   - `htmlPopup.cancel()` — finish without a result; window closes.
   - `htmlPopup.send(value)` — emit an event; window stays open.
   - `htmlPopup.onMessage(fn)` — receive messages sent by the agent.
-  - `htmlPopup.closeOnEscape` — default `true`; Esc cancels unless focus is in
-    an `input`, `textarea`, `select` or `contenteditable`.
+  - `htmlPopup.closeOnEscape` — default `true`; Esc closes the window
+    (`reason: user`) unless focus is in an `input`, `textarea`, `select` or
+    `contenteditable`, or a page listener called `preventDefault()` (the
+    bridge decides after the keydown dispatch has finished).
   - Values cross the bridge as `JSON.stringify` strings in both directions,
     so numbers, nesting and top-level scalars survive exactly.
 - **Transport**: JS never touches files. Page → bridge → Swift appends a JSON
@@ -135,12 +137,19 @@ html-popup-viewer PAGE.html --session DIR [--data FILE] [--title TEXT]
 ```
 - On start: `setsid()` (leave the caller's process group), `mkfifo DIR/in`,
   write `DIR/pid`, redirect its own logging to `DIR/viewer.log`.
+- `--data` must be UTF-8 JSON (a leading BOM is stripped), since the page
+  reads it with `JSON.parse`.
 - `--size` default `980x640`. `--title` overrides the page `<title>`.
 - After page load appends `ready`. Page `send(v)` appends `message`;
   `answer(v)` appends `answer` then closes; `cancel()` closes.
 - Every close path appends exactly one `closed` event with a `reason`
-  (`answer`, `cancel`, `user` — close button/Cmd-W/Esc, `agent`, `timeout`),
-  then exits.
+  (`answer`, `cancel`, `user` — close button/Cmd-W/Cmd-Q/Esc, `agent`,
+  `timeout`, `error` — load failure, invalid `--data`, crashed web content
+  process), then exits. A viewer killed by a signal writes nothing; the
+  wrapper writes the `closed` event for viewers it terminates itself.
+- Page posts that are not one-line JSON values are logged and dropped.
+  Inbound messages that arrive before `ready` are logged and dropped (the
+  wrapper hands out DIR only after `ready`).
 - Exit codes: 0 normal close (any reason except below), 3 page failed to load
   or `--data` is not valid JSON (appends `closed` with `reason: error` and a
   `message`), 4 `--timeout` reached, 2 usage error.
@@ -169,7 +178,7 @@ One JSON object per line, `seq` increasing from 1, written with a single
 ```
 html-popup.sh check                     # macOS, swiftc, jq, writable cache, GUI session
 html-popup.sh build                     # (re)build viewer if needed, print its path
-html-popup.sh show PAGE [opts]          # open, return at once, print DIR
+html-popup.sh show PAGE [opts]          # open, wait until loaded, print DIR
 html-popup.sh ask PAGE [opts] [--wait SEC]   # wait for answer; print answer JSON
 html-popup.sh ask --resume DIR [--wait SEC]  # keep waiting on an earlier ask
 html-popup.sh live start PAGE [opts]    # open, wait for "ready", print DIR
@@ -179,25 +188,43 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
 ```
 - `opts` = `--data FILE`, `--title TEXT`, `--size WxH`, `--timeout SEC`
   (window lifetime). `--wait SEC` = how long this one CLI call blocks,
-  default 100 s — below the Bash tool's 120 s default timeout.
-- **Detaching**: the viewer is started as
-  `"$viewer" ... </dev/null >>"$DIR/viewer.log" 2>&1 & disown`, and the
-  viewer calls `setsid()`. `show` and `live start` must return while the
-  window stays open.
+  counted from the start of the call (so a first-use compile and the page
+  load count too), default 100 s — below the Bash tool's 120 s default
+  timeout.
+- **Detaching**: the viewer is started with a double fork,
+  `( "$viewer" ... </dev/null >>"$DIR/viewer.log" 2>&1 & echo $! >"$DIR/pid" )`,
+  so it is reparented to launchd at once and is never a descendant of the
+  wrapper; the viewer also calls `setsid()`. A process-group kill or a
+  tree kill of the caller cannot reach it. `show` and `live start` must
+  return while the window stays open.
 - **Validation before detaching**: page exists and is readable, `--data`
-  passes `jq empty`. Errors are reported synchronously (exit 3), since a
-  detached viewer cannot report them.
+  passes `jq empty`, `--size` is `WxH` and `--timeout` a positive number.
+  Errors are reported synchronously (exit 3 for page/data, 2 for options),
+  since a detached viewer cannot report them.
 - **Startup**: build first (if needed), then start the viewer, then wait up to
-  10 s for `ready` while polling the viewer pid; if it dies first, return its
-  exit code at once with the last lines of `viewer.log`.
+  10 s for `ready` while polling the viewer pid. The wrapper cannot `wait`
+  for a detached viewer, so outcomes come from `events.jsonl`: `closed` with
+  `reason: error` → exit 3 with the last lines of `viewer.log`; another
+  `closed` (e.g. an early answer) → `ask` reads it, `show`/`live start` exit
+  1; viewer gone without events → exit 5 with the log tail; not ready in
+  10 s → terminate it, write `closed`/`error`, exit 3.
 - **`ask`**: wait for an `answer` or `closed` event. `answer` → print `data`
-  as one JSON line, exit 0. `closed` without answer → exit 1. `--wait`
-  expired → exit 4 and print to stderr: `still waiting; resume with:
-  html-popup.sh ask --resume <DIR>`. The window stays open.
-- **`live send`**: validate with `jq -c` (exit 2 if invalid); if the session
-  has a `closed` event or a dead pid → exit 1; otherwise
-  `exec 3<>"$DIR/in"; printf '%s\n' "$line" >&3; exec 3>&-` — a read-write
-  open never blocks on macOS, so a viewer that dies mid-call cannot hang it.
+  as one JSON line, exit 0. `closed` without answer → exit 1, including a
+  window `--timeout` (`window timed out without an answer`); `closed` with
+  `reason: error` → exit 3. `--wait` expired → exit 4 and print to stderr:
+  `still waiting; resume with: html-popup.sh ask --resume <DIR>`. The
+  window stays open; exit 4 always means that.
+- **Viewer liveness**: a session pid counts as its viewer only while
+  `kill -0` succeeds and `ps -o comm=` ends in `html-popup-viewer-*`. A
+  viewer that died without `closed` may have its pid recycled; such a pid is
+  treated as dead and never signalled. Startup polls plain `kill -0`, since
+  the fresh child is a bash subshell until it execs the viewer.
+- **`live send`**: validate with `jq -c` (exit 2 if it is not exactly one
+  JSON value); if the session has a `closed` event or a dead pid → exit 1;
+  otherwise a background subshell writes the line through a read-write open
+  of `DIR/in`. That open never blocks, but a write larger than the pipe
+  buffer does until the viewer reads it, so the wrapper kills the writer and
+  exits 1 if the viewer dies meanwhile.
 - **`live wait`**: keeps the last consumed `seq` in `DIR/cursor`; consumes
   only complete (newline-terminated) lines; polls every 0.2 s.
   - Prints the new events and exits 0 if they contain no `closed`.
@@ -205,14 +232,18 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
     consumed (returns at once).
   - Exits 5 if the pid is dead and no `closed` was written (viewer crashed).
   - Exits 4 when `--wait` expires with nothing new.
-- **`live close`**: write the close line, wait up to 5 s for `closed`; exit 0
-  also when the viewer was already gone. Keeps `events.jsonl` for reading.
+- **`live close`**: write the close line, wait up to 5 s for `closed`; if it
+  does not come, SIGTERM the viewer (SIGKILL after 5 s more) and append the
+  `closed` event (`reason: agent`) itself. Exit 0, also when the viewer was
+  already gone. Keeps `events.jsonl` for reading.
 - **Build cache**: `${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}`,
   binary `html-popup-viewer-<12 hex of sha256>`; compile to
   `<bin>.tmp.$$`, then `mv` into place (safe under concurrent first use).
-  Compiler: `${HTML_POPUP_SWIFTC:-swiftc}`; presence is checked with
-  `xcrun --find swiftc`, because `/usr/bin/swiftc` exists as a shim even
-  without the Command Line Tools.
+  Compiler: `$HTML_POPUP_SWIFTC` or else `xcrun swiftc` (the Xcode toolchain
+  with the AppKit/WebKit SDK, not an OSS `swiftc` first in PATH); presence
+  is checked with `xcrun --find swiftc`, because `/usr/bin/swiftc` exists as
+  a shim even without the Command Line Tools. After a fresh build, binaries
+  of older sources and temp files of finished builds are removed.
 - **Session dirs**: `mktemp -d "${TMPDIR:-/tmp}/html-popup.XXXXXX"`.
   `show`/`ask`/`live start` remove `html-popup.*` dirs older than one day
   whose pid is dead. A session without `--timeout` stays open until the user
@@ -222,10 +253,10 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
 | Code | Meaning |
 |------|---------|
 | 0 | ok / answered |
-| 1 | window closed (no answer for `ask`; session over for `wait`/`send`) |
-| 2 | usage error, missing dependency, build failure |
-| 3 | page or data invalid, page failed to load |
-| 4 | wait expired (window still open) / window `--timeout` reached |
+| 1 | window closed (no answer for `ask`, incl. window `--timeout`; session over for `wait`/`send`) |
+| 2 | usage error (incl. bad `--size`/`--timeout`, `live send` text that is not exactly one JSON value), missing dependency, build failure, DIR is not a session |
+| 3 | page or data invalid, page failed to load, page not ready in 10 s |
+| 4 | `--wait` expired; the window is still open |
 | 5 | viewer died without a `closed` event |
 
 ### Typical agent flows (for SKILL.md)

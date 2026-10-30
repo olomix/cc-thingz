@@ -177,7 +177,7 @@ bar, draggable, standard Edit shortcuts in form fields, Esc/Cmd-W to close,
 and no Dock icon. It runs detached from the calling command, so a Bash call
 that times out or is killed never closes it. There are three modes:
 
-- **show** — open a page for viewing and return at once.
+- **show** — open a page for viewing and return once it has loaded.
 - **ask** — open a page and wait for your answer (e.g. a picked month), print
   it as one JSON line, and close the window. A slow answer can be resumed with
   `ask --resume`.
@@ -190,9 +190,12 @@ Pages talk to Claude through an injected `window.htmlPopup` object
 include. Data is passed as a JSON file with `--data` rather than inlined into
 the page. Everything goes through one wrapper script,
 `plugins/html-popup/scripts/html-popup.sh` (`check`, `build`, `show`, `ask`,
-`live start|send|wait|close`), with documented exit codes. The plugin also
-ships a native-looking starter page (`assets/template.html`, light/dark
-aware) and a live example, `examples/solar-2025/`, a 2025 US solar generation
+`live start|send|wait|close`). Its exit codes: 0 ok, 1 window closed
+without an answer (or its `--timeout` hit), 2 usage or setup error, 3 page or
+data invalid or page not ready, 4 `--wait` expired with the window still
+open (call again), 5 viewer crashed; the skill's `SKILL.md` has details. The
+plugin also ships a native-looking starter page (`assets/template.html`,
+light/dark aware) and a live example, `examples/solar-2025/`, a 2025 US solar generation
 report from public EIA data where choosing a month gets a details panel
 computed by `run.sh`.
 
@@ -241,7 +244,8 @@ throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
 html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
 cache dir, while its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
-`swiftc` is installed and the session is a GUI (Aqua) login.
+`swiftc` is installed and the session is a GUI (Aqua) login, and tests that
+run the wrapper's build step are skipped off macOS.
 
 ## License
 

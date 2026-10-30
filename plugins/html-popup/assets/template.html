@@ -104,7 +104,7 @@
 
   // live mode: the agent replies with {"details": {label: value, ...}}.
   htmlPopup.onMessage((msg) => {
-    if (!msg || typeof msg.details !== "object") return;
+    if (!msg || !msg.details || typeof msg.details !== "object") return;
     const panel = document.getElementById("details");
     panel.replaceChildren(...Object.entries(msg.details).map(([k, v]) => {
       const row = document.createElement("div");

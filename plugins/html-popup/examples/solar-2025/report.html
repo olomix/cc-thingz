@@ -204,7 +204,7 @@
 
   // The agent replies with {"month": N, "details": {label: value, ...}}.
   htmlPopup.onMessage((msg) => {
-    if (!msg || typeof msg.details !== "object") return;
+    if (!msg || !msg.details || typeof msg.details !== "object") return;
     const panel = el("details");
     const heading = document.createElement("h2");
     heading.textContent = months[msg.month - 1]?.name ?? "Details";

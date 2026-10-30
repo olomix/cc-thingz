@@ -22,6 +22,7 @@ This is a hard rule for both **writing code** and **reviewing changes**:
 * Do not commit compiled binaries. A plugin that needs native code ships the
   source (e.g. `plugins/html-popup/viewer/*.swift`) and its wrapper compiles
   it on first use into a cache keyed by the source hash.
-* Tests that need a compiler or a GUI session must skip with a clear message
-  when those are missing (see `skip_unless_gui` in
-  `tests/html-popup_test.sh`); all other tests must run everywhere.
+* Tests that need macOS, a compiler or a GUI session must skip with a clear
+  message when those are missing (see `skip_unless_macos` and
+  `skip_unless_gui` in `tests/html-popup_test.sh`); all other tests must run
+  everywhere.

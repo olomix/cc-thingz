@@ -8,28 +8,34 @@
 # the page), `events.jsonl` (events from the page) and `viewer.log`. The
 # viewer runs detached, so a killed wrapper call never closes the window.
 #
-# Exit codes: 0 ok / answered; 1 window closed (no answer, session over);
-# 2 usage error, missing dependency, build failure; 3 page or data invalid,
-# page failed to load; 4 wait expired (window still open) or window
-# --timeout reached; 5 viewer died without a closed event.
+# Exit codes: 0 ok / answered; 1 window closed (no answer, session over,
+# window --timeout reached); 2 usage error, missing dependency, build
+# failure; 3 page or data invalid, page failed to load or not ready in 10 s;
+# 4 --wait expired, window still open; 5 viewer died without a closed event.
 #
 # Environment:
 #   CLAUDE_PLUGIN_DATA      cache dir (default: ~/Library/Caches/html-popup)
-#   HTML_POPUP_SWIFTC       compiler to use instead of swiftc (tests use a fake)
+#   HTML_POPUP_SWIFTC       compiler to use instead of xcrun swiftc (tests use a fake)
 #   HTML_POPUP_TEST_SCRIPT  JS file run after page load; headless test mode
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VIEWER_SRC="$PLUGIN_ROOT/viewer/html-popup-viewer.swift"
 CACHE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}"
-SWIFTC="${HTML_POPUP_SWIFTC:-swiftc}"
+# xcrun picks the Xcode toolchain with the AppKit/WebKit SDK, not whatever
+# swiftc (e.g. an OSS toolchain) comes first in PATH.
+if [[ -n "${HTML_POPUP_SWIFTC:-}" ]]; then
+  SWIFTC=("$HTML_POPUP_SWIFTC")
+else
+  SWIFTC=(xcrun swiftc)
+fi
 
 usage() {
   cat >&2 <<'EOF'
 usage: html-popup.sh <command> [args...]
   check                          verify macOS, swiftc, jq, cache, GUI session
   build                          build the viewer if needed, print its path
-  show PAGE [opts]               open a window, return at once, print DIR
+  show PAGE [opts]               open, wait until the page loads, print DIR
   ask PAGE [opts] [--wait SEC]   wait for the answer, print it as JSON
   ask --resume DIR [--wait SEC]  keep waiting on an earlier ask
   live start PAGE [opts]         open, wait until ready, print DIR
@@ -37,7 +43,7 @@ usage: html-popup.sh <command> [args...]
   live wait DIR [--wait SEC]     print new events as JSON lines
   live close DIR                 close the window (ok if already gone)
 opts: --data FILE  --title TEXT  --size WxH  --timeout SEC (window lifetime)
---wait SEC: how long this call blocks (default 100)
+--wait SEC: how long this call blocks, from its start (default 100)
 EOF
 }
 
@@ -56,8 +62,8 @@ missing_macos() {
 # so ask xcrun whether a real compiler is installed.
 missing_compiler() {
   if [[ -n "${HTML_POPUP_SWIFTC:-}" ]]; then
-    command -v "$SWIFTC" >/dev/null 2>&1 && return 1
-    printf 'html-popup: HTML_POPUP_SWIFTC not found: %s\n' "$SWIFTC" >&2
+    command -v "$HTML_POPUP_SWIFTC" >/dev/null 2>&1 && return 1
+    printf 'html-popup: HTML_POPUP_SWIFTC not found: %s\n' "$HTML_POPUP_SWIFTC" >&2
     return 0
   fi
   xcrun --find swiftc >/dev/null 2>&1 && return 1
@@ -102,7 +108,7 @@ viewer_path() {
 
 # build_viewer : compile the viewer unless cached; print its path.
 build_viewer() {
-  local failed=0 bin tmp
+  local failed=0 bin tmp old
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
@@ -114,11 +120,19 @@ build_viewer() {
     # A per-process temp name plus an atomic mv keeps concurrent first uses
     # from running a half-written binary.
     tmp="$bin.tmp.$$"
-    if ! "$SWIFTC" -O -o "$tmp" "$VIEWER_SRC" >&2; then
+    if ! "${SWIFTC[@]}" -O -o "$tmp" "$VIEWER_SRC" >&2; then
       rm -f "$tmp"
       die "failed to compile the viewer"
     fi
     mv -f "$tmp" "$bin"
+    # Drop binaries of older sources; keep temp files of builds still running.
+    for old in "$CACHE_DIR"/html-popup-viewer-*; do
+      case "$old" in
+        "$bin") ;;
+        *.tmp.*) pid_alive "${old##*.tmp.}" || rm -f "$old" ;;
+        *) rm -f "$old" ;;
+      esac
+    done
   fi
   printf '%s\n' "$bin"
 }
@@ -148,6 +162,15 @@ pid_alive() {
   [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null
 }
 
+# viewer_alive <pid> : true when pid is a running viewer. A dead viewer's pid
+# may be recycled, so an unrelated process must never count as the session.
+viewer_alive() {
+  local comm
+  pid_alive "$1" || return 1
+  comm="$(ps -ww -p "$1" -o comm= 2>/dev/null)" || return 1
+  [[ "${comm##*/}" == html-popup-viewer-* ]]
+}
+
 session_pid() {
   tr -d '[:space:]' 2>/dev/null <"$1/pid" || true
 }
@@ -175,16 +198,55 @@ has_event() {
     >/dev/null 2>&1
 }
 
-# Wall-clock deadline in whole seconds plus a sleep budget: SECONDS truncates,
-# so either alone could end a short wait early or let a long one drift.
+# SECONDS truncates to whole seconds, so "SECONDS > end" never ends a wait
+# early. A zero wait checks once.
 deadline_start() {
-  WAIT_START=$SECONDS
-  WAIT_TRIES=$(($1 * 5))
-  WAIT_SECS=$1
+  WAIT_END=$((SECONDS + $1))
+  WAIT_ONCE=$(($1 == 0))
 }
 
 deadline_passed() {
-  ((WAIT_TRIES-- <= 0)) || ((SECONDS - WAIT_START > WAIT_SECS))
+  ((WAIT_ONCE == 1 || SECONDS > WAIT_END))
+}
+
+# need_value <option> [value...] : exit 2 unless the option has a value.
+need_value() {
+  (($# >= 2)) || die "missing value for $1"
+}
+
+# first_event <dir> <type> : print the first complete event of that type.
+first_event() {
+  complete_events "$1" | jq -c --arg t "$2" 'select(.type == $t)' 2>/dev/null |
+    head -n 1
+}
+
+# new_events <dir> <cursor> : print complete events with seq above cursor.
+new_events() {
+  complete_events "$1" | jq -c --argjson c "$2" 'select(.seq > $c)' \
+    2>/dev/null || true
+}
+
+# terminate_viewer <dir> <pid> <reason> [message] : kill a viewer that did
+# not close by itself and append the closed event it could not write.
+terminate_viewer() {
+  local dir="$1" pid="$2" file="$1/events.jsonl" tries=25 seq
+  if viewer_alive "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    while viewer_alive "$pid" && ((tries-- > 0)); do
+      sleep "$POLL"
+    done
+    if viewer_alive "$pid"; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+  has_event "$dir" closed && return 0
+  if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then
+    printf '\n' >>"$file"
+  fi
+  seq="$(complete_events "$dir" | jq -s 'map(.seq) | max // 0')"
+  jq -cn --argjson seq "$((seq + 1))" --arg reason "$3" --arg msg "${4:-}" \
+    '{seq: $seq, type: "closed", reason: $reason}
+      + if $msg == "" then {} else {message: $msg} end' >>"$file"
 }
 
 # remove_stale_sessions : drop session dirs older than a day whose viewer is
@@ -192,39 +254,51 @@ deadline_passed() {
 remove_stale_sessions() {
   local dir
   while IFS= read -r dir; do
-    pid_alive "$(session_pid "$dir")" || rm -rf "$dir"
+    viewer_alive "$(session_pid "$dir")" || rm -rf "$dir"
   done < <(find "$TMP_ROOT" -maxdepth 1 -type d -name 'html-popup.*' \
     -mtime +0 2>/dev/null)
 }
 
-# start_session <page> [opts...] : validate, build, start a detached viewer,
-# wait for its ready event and set SESSION_DIR. Sets ASK_WAIT from --wait
-# when ALLOW_WAIT=1.
+# startup_failed <code> : report a viewer that ended before ready, then exit.
+startup_failed() {
+  printf 'html-popup: viewer exited before the page was ready; log:\n' >&2
+  tail -n 5 "$SESSION_DIR/viewer.log" >&2 || true
+  exit "$1"
+}
+
+# start_session <page> [opts...] : validate, build, start a detached viewer
+# and wait until the page is ready; sets SESSION_DIR. If the window closed
+# before that without an error (e.g. an early answer), sets EARLY_CLOSE=1.
 start_session() {
-  local page="" data="" bin pid rc arg
+  local page="" data="" bin pid closed
   local -a viewer_args=()
+  EARLY_CLOSE=0
   while (($# > 0)); do
-    arg="$1"
-    case "$arg" in
-      --data | --title | --size | --timeout | --wait)
-        (($# >= 2)) || die "missing value for $arg"
-        case "$arg" in
-          --data) data="$2" ;;
-          --wait)
-            [[ "${ALLOW_WAIT:-0}" == 1 ]] || die "unknown option: $arg"
-            ASK_WAIT="$(parse_wait "$2")"
-            ;;
-        esac
-        [[ "$arg" == --wait ]] || viewer_args+=("$arg" "$2")
-        shift 2
+    case "$1" in
+      --data)
+        need_value "$@"
+        data="$2"
         ;;
-      -*) die "unknown option: $arg" ;;
+      --title) need_value "$@" ;;
+      --size)
+        need_value "$@"
+        [[ "$2" =~ ^[1-9][0-9]*x[1-9][0-9]*$ ]] || die "bad --size: $2 (WxH)"
+        ;;
+      --timeout)
+        need_value "$@"
+        [[ "$2" =~ ^[0-9]*\.?[0-9]+$ && "$2" =~ [1-9] ]] ||
+          die "bad --timeout: $2 (seconds)"
+        ;;
+      -*) die "unknown option: $1" ;;
       *)
         [[ -z "$page" ]] || die "only one PAGE allowed"
-        page="$arg"
+        page="$1"
         shift
+        continue
         ;;
     esac
+    viewer_args+=("$1" "$2")
+    shift 2
   done
   [[ -n "$page" ]] || die "missing PAGE"
   require_jq
@@ -244,39 +318,44 @@ start_session() {
   bin="$(build_viewer)" || exit 2
   SESSION_DIR="$(mktemp -d "$TMP_ROOT/html-popup.XXXXXX")"
 
-  "$bin" "$page" --session "$SESSION_DIR" "${viewer_args[@]+"${viewer_args[@]}"}" \
-    </dev/null >>"$SESSION_DIR/viewer.log" 2>&1 &
-  pid=$!
-  # The viewer writes the same pid itself; writing it now closes the window
-  # in which a fast follow-up call would find no pid file.
-  printf '%s\n' "$pid" >"$SESSION_DIR/pid"
+  # Double fork: the subshell exits at once, so the viewer is reparented to
+  # launchd and a caller that kills our process tree cannot reach it.
+  (
+    "$bin" "$page" --session "$SESSION_DIR" \
+      "${viewer_args[@]+"${viewer_args[@]}"}" \
+      </dev/null >>"$SESSION_DIR/viewer.log" 2>&1 &
+    printf '%s\n' "$!" >"$SESSION_DIR/pid"
+  )
+  pid="$(session_pid "$SESSION_DIR")"
 
   deadline_start "$READY_WAIT"
-  while ! has_event "$SESSION_DIR" ready; do
+  until has_event "$SESSION_DIR" ready; do
+    closed="$(first_event "$SESSION_DIR" closed)"
+    if [[ -n "$closed" ]]; then
+      [[ "$(jq -r .reason <<<"$closed")" == error ]] && startup_failed 3
+      EARLY_CLOSE=1
+      return 0
+    fi
+    # Plain liveness: until exec, our fresh child is still a bash subshell.
     if ! pid_alive "$pid"; then
-      has_event "$SESSION_DIR" ready && break
-      # Still our child, so wait reports its exit code.
-      rc=0
-      wait "$pid" || rc=$?
-      printf 'html-popup: viewer exited before the page was ready; log:\n' >&2
-      tail -n 5 "$SESSION_DIR/viewer.log" >&2 || true
-      case "$rc" in
-        0) exit 1 ;;
-        2 | 3 | 4) exit "$rc" ;;
-        *) exit 5 ;;
-      esac
+      # Recheck: the viewer may have written its last events just now.
+      has_event "$SESSION_DIR" ready || has_event "$SESSION_DIR" closed ||
+        startup_failed 5
+      continue
     fi
     if deadline_passed; then
-      kill "$pid" 2>/dev/null || true
+      terminate_viewer "$SESSION_DIR" "$pid" error \
+        "page not ready after ${READY_WAIT}s"
       die "page not ready after ${READY_WAIT}s; see $SESSION_DIR/viewer.log" 3
     fi
     sleep "$POLL"
   done
-  disown "$pid" 2>/dev/null || true
 }
 
 cmd_show() {
   start_session "$@"
+  ((EARLY_CLOSE == 0)) ||
+    die "window closed before the page was ready: $SESSION_DIR" 1
   printf '%s\n' "$SESSION_DIR"
 }
 
@@ -296,12 +375,12 @@ wait_answer() {
         exit 0
       fi
       case "$(jq -r .reason <<<"$event")" in
-        timeout) die "window timed out without an answer" 4 ;;
+        timeout) die "window timed out without an answer" 1 ;;
         error) die "window closed with an error: $(jq -r '.message // ""' <<<"$event")" 3 ;;
         *) die "window closed without an answer" 1 ;;
       esac
     fi
-    if ! pid_alive "$pid"; then
+    if ! viewer_alive "$pid"; then
       # Recheck: the viewer may have written its last events just now.
       if has_event "$dir" closed || has_event "$dir" answer; then
         continue
@@ -318,29 +397,42 @@ wait_answer() {
 }
 
 cmd_ask() {
-  local dir=""
-  ASK_WAIT="$DEFAULT_WAIT"
-  if [[ "${1:-}" == --resume ]]; then
-    (($# >= 2)) || die "missing DIR for --resume"
-    dir="$2"
+  local dir="" wait="$DEFAULT_WAIT" resume=0
+  local -a args=()
+  while (($# > 0)); do
+    case "$1" in
+      --resume)
+        need_value "$@"
+        dir="$2"
+        resume=1
+        ;;
+      --wait)
+        need_value "$@"
+        wait="$(parse_wait "$2")"
+        ;;
+      --data | --title | --size | --timeout)
+        need_value "$@"
+        args+=("$1" "$2")
+        ;;
+      *)
+        args+=("$1")
+        shift
+        continue
+        ;;
+    esac
     shift 2
-    while (($# > 0)); do
-      case "$1" in
-        --wait)
-          (($# >= 2)) || die "missing value for --wait"
-          ASK_WAIT="$(parse_wait "$2")"
-          shift 2
-          ;;
-        *) die "unknown argument: $1" ;;
-      esac
-    done
+  done
+  if ((resume == 1)); then
+    ((${#args[@]} == 0)) || die "unknown argument: ${args[0]}"
     require_jq
     require_session "$dir"
   else
-    ALLOW_WAIT=1 start_session "$@"
+    start_session "${args[@]+"${args[@]}"}"
     dir="$SESSION_DIR"
   fi
-  wait_answer "$dir" "$ASK_WAIT"
+  # --wait counts from the start of this call, so a first-use compile and the
+  # page load cannot push it past the Bash tool's timeout.
+  wait_answer "$dir" "$((wait > SECONDS ? wait - SECONDS : 0))"
 }
 
 # write_inbound <dir> <line> : write one line to the session FIFO. The
@@ -355,7 +447,7 @@ write_inbound() {
   ) &
   writer=$!
   while pid_alive "$writer"; do
-    if ! pid_alive "$pid"; then
+    if ! viewer_alive "$pid"; then
       kill "$writer" 2>/dev/null || true
       wait "$writer" 2>/dev/null || true
       return 1
@@ -368,7 +460,7 @@ write_inbound() {
 
 # session_over <dir> : true when the window has closed or its viewer is gone.
 session_over() {
-  has_event "$1" closed || ! pid_alive "$(session_pid "$1")"
+  has_event "$1" closed || ! viewer_alive "$(session_pid "$1")"
 }
 
 cmd_live_send() {
@@ -391,7 +483,7 @@ cmd_live_wait() {
   while (($# > 0)); do
     case "$1" in
       --wait)
-        (($# >= 2)) || die "missing value for --wait"
+        need_value "$@"
         wait="$(parse_wait "$2")"
         shift 2
         ;;
@@ -406,8 +498,7 @@ cmd_live_wait() {
 
   deadline_start "$wait"
   while :; do
-    batch="$(complete_events "$dir" |
-      jq -c --argjson c "$cursor" 'select(.seq > $c)' 2>/dev/null || true)"
+    batch="$(new_events "$dir" "$cursor")"
     if [[ -n "$batch" ]]; then
       last="$(jq -s 'map(.seq) | max' <<<"$batch")"
       printf '%s\n' "$last" >"$dir/cursor.tmp.$$"
@@ -419,11 +510,9 @@ cmd_live_wait() {
       exit 0
     fi
     has_event "$dir" closed && exit 1
-    if ! pid_alive "$pid"; then
+    if ! viewer_alive "$pid"; then
       # Recheck: the viewer may have written its last events just now.
-      batch="$(complete_events "$dir" |
-        jq -c --argjson c "$cursor" 'select(.seq > $c)' 2>/dev/null || true)"
-      [[ -n "$batch" ]] && continue
+      [[ -n "$(new_events "$dir" "$cursor")" ]] && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
     deadline_passed && exit 4
@@ -444,7 +533,7 @@ cmd_live_close() {
     if deadline_passed; then
       printf 'html-popup: window did not close in %ss; terminating it\n' \
         "$CLOSE_WAIT" >&2
-      kill "$pid" 2>/dev/null || true
+      terminate_viewer "$dir" "$pid" agent
       return 0
     fi
     sleep "$POLL"
