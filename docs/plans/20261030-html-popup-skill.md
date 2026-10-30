@@ -281,16 +281,16 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Modify: `.claude-plugin/marketplace.json`
 - Create: `tests/html-popup_test.sh`
 
-- [ ] create `plugin.json` (name `html-popup`, version `0.1.0`, author,
+- [x] create `plugin.json` (name `html-popup`, version `0.1.0`, author,
       homepage, repository, license — same shape as `gh-lookup`)
-- [ ] add the `html-popup` entry to `.claude-plugin/marketplace.json`
-- [ ] create `tests/html-popup_test.sh` with `assert`/`assert_eq`, a
+- [x] add the `html-popup` entry to `.claude-plugin/marketplace.json`
+- [x] create `tests/html-popup_test.sh` with `assert`/`assert_eq`, a
       `trap cleanup EXIT` that kills tracked viewer pids and removes temp
       dirs, and `skip_unless_gui` (`xcrun --find swiftc` + `launchctl
       managername` = `Aqua`)
-- [ ] write tests: `plugin.json` and `marketplace.json` parse with `jq` and
+- [x] write tests: `plugin.json` and `marketplace.json` parse with `jq` and
       contain the `html-popup` entry
-- [ ] run `tests/html-popup_test.sh` and the other plugin tests — must pass
+- [x] run `tests/html-popup_test.sh` and the other plugin tests — must pass
       before task 2
 
 ### Task 2: Wrapper — check and build with hash cache

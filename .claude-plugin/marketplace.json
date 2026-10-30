@@ -18,6 +18,11 @@
       "name": "dotfiles",
       "source": "./plugins/dotfiles",
       "description": "Teach Claude Code to operate a bare-repo dotfiles setup and prompt to commit whenever a tracked dotfile is edited."
+    },
+    {
+      "name": "html-popup",
+      "source": "./plugins/html-popup",
+      "description": "Show generated HTML reports, charts and dialogs in a native macOS window and exchange data with them (show, ask, live modes)."
     }
   ]
 }

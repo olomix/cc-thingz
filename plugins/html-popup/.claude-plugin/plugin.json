@@ -1,0 +1,11 @@
+{
+  "name": "html-popup",
+  "description": "Show generated HTML reports, charts and dialogs in a native macOS window and exchange data with them (show, ask, live modes).",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oleg Lomaka"
+  },
+  "homepage": "https://github.com/olomix/cc-thingz",
+  "repository": "https://github.com/olomix/cc-thingz",
+  "license": "MIT"
+}
