@@ -1,8 +1,8 @@
 # olomix-cc-thingz
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin
-marketplace. It currently ships three plugins, **fsnotes**, **gh-lookup**, and
-**dotfiles**.
+marketplace. It currently ships four plugins, **fsnotes**, **gh-lookup**,
+**dotfiles**, and **html-popup**.
 
 ## fsnotes
 
@@ -164,6 +164,56 @@ Set these only if your repo lives somewhere other than `$HOME/.dotfiles`. The
 overrides also let the test suite target a temporary sandbox; if
 `DOTFILES_GIT_DIR` does not point at a directory, the plugin stays silent.
 
+## html-popup
+
+Lets Claude show a generated HTML page — a report, chart, table, form, or
+dialog — in a native macOS window and get data back from it, without a browser
+tab or a web server. Claude reaches for it on "show it in a window", "chart
+this", "ask me which month", or when it needs you to pick or fill in
+something.
+
+The window is a small WebKit viewer with a native frame: a transparent title
+bar, draggable, standard Edit shortcuts in form fields, Esc/Cmd-W to close,
+and no Dock icon. It runs detached from the calling command, so a Bash call
+that times out or is killed never closes it. There are three modes:
+
+- **show** — open a page for viewing and return at once.
+- **ask** — open a page and wait for your answer (e.g. a picked month), print
+  it as one JSON line, and close the window. A slow answer can be resumed with
+  `ask --resume`.
+- **live** — keep the window open and exchange messages both ways: the page
+  sends events to Claude, Claude sends updates back, until either side closes
+  it.
+
+Pages talk to Claude through an injected `window.htmlPopup` object
+(`data`, `answer`, `cancel`, `send`, `onMessage`), so they need no script
+include. Data is passed as a JSON file with `--data` rather than inlined into
+the page. Everything goes through one wrapper script,
+`plugins/html-popup/scripts/html-popup.sh` (`check`, `build`, `show`, `ask`,
+`live start|send|wait|close`), with documented exit codes. The plugin also
+ships a native-looking starter page (`assets/template.html`, light/dark
+aware) and a live example, `examples/solar-2025/`, a 2025 US solar generation
+report from public EIA data where choosing a month gets a details panel
+computed by `run.sh`.
+
+The viewer is a single Swift source file, compiled with `swiftc` on first use
+(a few seconds) and cached by source hash in
+`${CLAUDE_PLUGIN_DATA:-~/Library/Caches/html-popup}`; no binary is committed,
+and plugin updates rebuild it automatically.
+
+### Requirements
+
+macOS with a GUI session, the Xcode Command Line Tools (`swiftc`), and `jq`.
+`html-popup.sh check` reports any missing piece. Sandboxed Bash may block the
+cache dir or the window server.
+
+### Install
+
+```
+/plugin marketplace add olomix/cc-thingz
+/plugin install html-popup
+```
+
 ## Development
 
 ```
@@ -176,6 +226,10 @@ tests/gh-lookup_test.sh
 
 shellcheck tests/dotfiles_test.sh plugins/dotfiles/scripts/*.sh
 tests/dotfiles_test.sh
+
+shellcheck tests/html-popup_test.sh plugins/html-popup/scripts/*.sh \
+  plugins/html-popup/examples/*/*.sh tests/fixtures/fake-swiftc.sh
+tests/html-popup_test.sh
 ```
 
 Tests are pure bash with no external framework. The fsnotes tests build a
@@ -183,7 +237,11 @@ temporary fixture store via `FSNOTES_DIR` and never touch the real iCloud
 notes; the gh-lookup tests stub `gh` via `GH_BIN` and synthetic fixtures, so
 they never call the real binary or the network; the dotfiles tests build a
 throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
-`DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`.
+`DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`; the
+html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
+cache dir, while its viewer tests compile the real viewer and drive invisible
+windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
+`swiftc` is installed and the session is a GUI (Aqua) login.
 
 ## License
 

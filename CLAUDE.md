@@ -16,3 +16,12 @@ This is a hard rule for both **writing code** and **reviewing changes**:
 * Author/copyright attribution (the project author's name in `LICENSE`,
   `plugin.json`, `marketplace.json`) is intentional and allowed.
 * When reviewing a diff, flag any newly added personal data as a blocker.
+
+## Compiled helpers and GUI tests
+
+* Do not commit compiled binaries. A plugin that needs native code ships the
+  source (e.g. `plugins/html-popup/viewer/*.swift`) and its wrapper compiles
+  it on first use into a cache keyed by the source hash.
+* Tests that need a compiler or a GUI session must skip with a clear message
+  when those are missing (see `skip_unless_gui` in
+  `tests/html-popup_test.sh`); all other tests must run everywhere.

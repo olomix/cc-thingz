@@ -498,11 +498,11 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
   tests pass. Recheck on an unlocked desktop.
 
 ### Task 11: [Final] Update documentation
-- [ ] add an `html-popup` section to `README.md` (purpose, requirements,
+- [x] add an `html-popup` section to `README.md` (purpose, requirements,
       install, modes) and update the plugin count in the intro
-- [ ] update `CLAUDE.md` if new conventions emerged (e.g. compiled-on-use
+- [x] update `CLAUDE.md` if new conventions emerged (e.g. compiled-on-use
       Swift sources, GUI-gated tests)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/` (done by the orchestrator after reviews)
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
