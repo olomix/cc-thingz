@@ -4,7 +4,9 @@
 #
 # Viewer tests need a real compiler and a GUI login session; they call
 # skip_unless_gui and are skipped elsewhere. Tests that run the wrapper's
-# build step need macOS (skip_unless_macos). All other tests always run.
+# build step or fake viewers need macOS (skip_unless_macos): the wrapper
+# knows a viewer by its process name, which exec -a only sets on macOS.
+# All other tests always run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -219,6 +221,16 @@ count_lines() {
   fi
 }
 
+# count_messages <file> : number of non-blank lines, 0 when the file does not
+# exist. Each send starts with a newline, so FIFO copies hold blank lines.
+count_messages() {
+  if [[ -f "$1" ]]; then
+    grep -c . "$1" || true
+  else
+    printf '0'
+  fi
+}
+
 # --- Tests: subcommand dispatch -----------------------------------------------
 
 test_dispatch() {
@@ -276,7 +288,21 @@ test_build_cache() {
   assert "changed source gets a new binary" test "$first" != "$second"
   assert "new binary is executable" test -x "$second"
   assert_eq "changed source compiles again" "2" "$(count_lines "$calls")"
-  assert "binary of the old source is removed" test ! -e "$first"
+  assert "binary used within a day is kept" test -e "$first"
+
+  # Each use refreshes the binary; only files unused for a day are pruned.
+  touch -t 202001010000 "$first" "$second"
+  touch -t 202001010000 "$first.tmp.1"
+  run_capture "$wrapper" build
+  assert_eq "cached build exits 0" "0" "$RC"
+  assert "a cached build refreshes its binary" \
+    test -z "$(find "$second" -mtime +0)"
+  printf '// changed again\n' >>"$root/viewer/html-popup-viewer.swift"
+  run_capture "$wrapper" build
+  assert_eq "third source builds" "0" "$RC"
+  assert "binary unused for a day is removed" test ! -e "$first"
+  assert "old temp file is removed" test ! -e "$first.tmp.1"
+  assert "recently used binary is kept" test -x "$second"
 
   unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_CALLS
 }
@@ -645,6 +671,18 @@ test_bridge_raw_posts() {
   assert "malformed body is logged" contains "malformed bridge message" "$log"
 }
 
+test_bridge_child_frame() {
+  skip_unless_gui "bridge ignores child frames" || return 0
+  ensure_viewer
+  run_bridge child-frame.js
+  assert_eq "child-frame post leaves the cancel exit 0" "0" "$RC"
+  assert_eq "iframe answer never reaches the event log" \
+    '{"seq":2,"type":"closed","reason":"cancel"}' "$(sed -n '2,$p' "$EVENTS")"
+  assert "dropped child-frame message is logged" \
+    contains "dropped bridge message from a child frame" \
+    "$(cat "$SESSION/viewer.log")"
+}
+
 test_viewer_size() {
   skip_unless_gui "viewer --size" || return 0
   ensure_viewer
@@ -829,14 +867,19 @@ wrap() {
   fi
 }
 
-# fake_session <var> <pid> [events...] : make a session dir without a viewer
-# and store its path in <var>.
+# fake_session <var> <pid|live> [events...] : make a session dir without a
+# real viewer and store its path in <var>. `live` starts an idle fake viewer
+# for the dir (see idle_viewer) and records its pid.
 fake_session() {
   local var="$1" pid="$2" dir line
   shift 2
   dir="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
-  printf '%s\n' "$pid" >"$dir/pid"
   mkfifo "$dir/in"
+  if [[ "$pid" == live ]]; then
+    idle_viewer "$dir"
+    pid="$IDLE_PID"
+  fi
+  printf '%s\n' "$pid" >"$dir/pid"
   : >"$dir/events.jsonl"
   for line in "$@"; do
     printf '%s\n' "$line" >>"$dir/events.jsonl"
@@ -853,11 +896,22 @@ dead_pid() {
   printf '%s' "$pid"
 }
 
-# live_pid : set LIVE_PID to a tracked idle process named like a viewer.
-live_pid() {
-  exec -a "$FAKE_VIEWER_NAME" sleep 120 >/dev/null 2>&1 &
-  track_pid "$!"
-  LIVE_PID=$!
+# idle_viewer <dir> : set IDLE_PID to a tracked idle process that looks like
+# the viewer of session dir: named like one, with --session DIR in its args.
+# Like the viewer it holds the FIFO open but never reads it. It is not our
+# child, so once killed it is reaped and kill -0 fails. Short sleeps leave
+# no orphan behind when it is killed.
+idle_viewer() {
+  # shellcheck disable=SC2016 # loop code for the idle bash, not for us
+  (
+    exec -a "$FAKE_VIEWER_NAME" /bin/bash -c \
+      'exec 3<>"$2/in"; for ((i = 0; i < 600; i++)); do sleep 0.2; done' \
+      "$FAKE_VIEWER_NAME" --session "$1" >/dev/null 2>&1 &
+    printf '%s' "$!" >"$1.idle"
+  )
+  IDLE_PID="$(cat "$1.idle")"
+  rm -f "$1.idle"
+  track_pid "$IDLE_PID"
 }
 
 # other_pid : set OTHER_PID to a tracked idle process that is not a viewer,
@@ -871,8 +925,9 @@ other_pid() {
 # --- Tests: wrapper arguments and sessions without a viewer -------------------
 
 test_wrapper_args() {
+  skip_unless_macos "wrapper arguments" || return 0
   new_tmpdir WRAP_TMP
-  local session stale fresh alive dead
+  local session stale fresh dead
 
   wrap - show "$WRAP_TMP/no-such-page.html"
   assert_eq "show with a missing page exits 3" "3" "$RC"
@@ -917,11 +972,9 @@ test_wrapper_args() {
 
   # Stale cleanup runs before validation, so a failing call still prunes.
   dead="$(dead_pid)"
-  live_pid
-  alive="$LIVE_PID"
   fake_session stale "$dead"
   fake_session fresh "$dead"
-  fake_session session "$alive"
+  fake_session session live
   touch -t 202001010000 "$stale" "$session"
   wrap - show "$WRAP_TMP/no-such-page.html"
   assert "old session with a dead viewer is removed" test ! -e "$stale"
@@ -930,12 +983,12 @@ test_wrapper_args() {
 }
 
 test_wrapper_fake_sessions() {
+  skip_unless_macos "wrapper with fake sessions" || return 0
   new_tmpdir WRAP_TMP
   local session dead
   dead="$(dead_pid)"
-  live_pid
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}'
+  fake_session session live '{"seq":1,"type":"ready"}'
   wrap - live send "$session" '{"broken":'
   assert_eq "send of invalid JSON exits 2" "2" "$RC"
   wrap - live send "$session" '1 2'
@@ -983,12 +1036,12 @@ test_wrapper_fake_sessions() {
   assert_eq "ask --resume on a crashed viewer exits 5" "5" "$RC"
 
   # A corrupt cursor starts over from the first event.
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}'
+  fake_session session live '{"seq":1,"type":"ready"}'
   printf 'garbage\n' >"$session/cursor"
   wrap - live wait "$session" --wait 0
   assert_eq "corrupt cursor restarts at seq 1" '{"seq":1,"type":"ready"}' "$OUT"
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}'
+  fake_session session live '{"seq":1,"type":"ready"}'
   rm "$session/in"
   wrap - live send "$session" '1'
   assert_eq "send to a session without a FIFO exits 1" "1" "$RC"
@@ -999,6 +1052,7 @@ test_wrapper_fake_sessions() {
 # A viewer that died without a closed event and whose pid was recycled by an
 # unrelated process: the session is over and that process is left alone.
 test_wrapper_recycled_pid() {
+  skip_unless_macos "recycled viewer pid" || return 0
   new_tmpdir WRAP_TMP
   local session
   other_pid
@@ -1025,38 +1079,382 @@ test_wrapper_recycled_pid() {
   assert "unrelated process survives stale cleanup" kill -0 "$OTHER_PID"
 }
 
-test_wrapper_resume_outcomes() {
+# A crashed session whose pid now belongs to another session's viewer: the
+# stale session is over and the other window is left alone.
+test_wrapper_session_identity() {
+  skip_unless_macos "session identity" || return 0
+  new_tmpdir WRAP_TMP
+  local session other pid
+  fake_session other live '{"seq":1,"type":"ready"}'
+  pid="$(session_pid_of "$other")"
+  fake_session session "$pid" '{"seq":1,"type":"ready"}'
+
+  wrap - live send "$session" '1'
+  assert_eq "send to another session's viewer exits 1" "1" "$RC"
+  wrap - live wait "$session" --wait 0
+  assert_eq "first wait still gets the ready event" "0" "$RC"
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait on another session's viewer exits 5" "5" "$RC"
+  wrap - ask --resume "$session" --wait 5
+  assert_eq "ask --resume on another session's viewer exits 5" "5" "$RC"
+  wrap - live close "$session"
+  assert_eq "close of the stale session exits 0" "0" "$RC"
+  assert "close does not terminate the other viewer" \
+    not_contains "terminating" "$ERR"
+  assert "other session's viewer survives close" kill -0 "$pid"
+
+  touch -t 202001010000 "$session"
+  wrap - show "$WRAP_TMP/no-such-page.html"
+  assert "stale session is removed" test ! -e "$session"
+  assert "other session's viewer survives stale cleanup" kill -0 "$pid"
+  wrap - live send "$other" '1'
+  assert_eq "other session still accepts sends" "0" "$RC"
+}
+
+# read_fifo <dir> <out> : copy the session FIFO to out until killed; sets
+# READER_PID. The read-write open never sees EOF between senders.
+read_fifo() {
+  # shellcheck disable=SC2016 # code for the reader bash, not for us
+  /bin/bash -c 'exec 3<>"$1"; exec cat <&3 >"$2"' _ "$1/in" "$2" &
+  READER_PID=$!
+  track_pid "$READER_PID"
+}
+
+# Lines over the pipe's atomic write size must not interleave when several
+# senders write to one session at once.
+test_wrapper_concurrent_sends() {
+  skip_unless_macos "concurrent sends" || return 0
+  new_tmpdir WRAP_TMP
+  local session out="$WRAP_TMP/received" big i tries=50
+  local -a pids=()
+  fake_session session live '{"seq":1,"type":"ready"}'
+  read_fifo "$session" "$out"
+  big="$(head -c 72000 /dev/zero | tr '\0' a)"
+  for i in 1 2 3 4; do
+    env TMPDIR="$WRAP_TMP" "$WRAPPER" live send "$session" \
+      "{\"id\":$i,\"k\":\"$big\"}" >/dev/null 2>&1 &
+    pids+=("$!")
+  done
+  for i in "${pids[@]}"; do
+    assert "concurrent send $i exits 0" wait "$i"
+  done
+  while ((tries-- > 0)) && (($(count_messages "$out") < 4)); do
+    sleep 0.1
+  done
+  kill "$READER_PID" 2>/dev/null || true
+  assert_eq "every concurrent line arrives whole" "1,2,3,4 72000" \
+    "$(jq -rs '"\(map(.id) | sort | join(",")) \(map(.k | length) | min)"' \
+      "$out" 2>/dev/null)"
+  assert "send locks are released" test -z "$(held_locks "$session")"
+
+  # A lock left by a killed sender is passed over, not deleted.
+  rm -f "$session"/in.lock.*
+  ln -s "$(dead_pid)" "$session/in.lock.1"
+  wrap - live send "$session" '"after stale lock"'
+  assert_eq "send takes over a stale lock" "0" "$RC"
+  assert_eq "taken-over lock is released" "in.lock.1" "$(held_locks "$session")"
+
+  # A live sender stuck on a viewer that stopped reading must not hang close.
+  ln -s "$$" "$session/in.lock.3"
+  run_capture env TMPDIR="$WRAP_TMP" "$WRAPPER" live close "$session"
+  assert_eq "close with a busy send lock exits 0" "0" "$RC"
+  assert "busy close terminates the viewer" contains "terminating it" "$ERR"
+  assert_eq "busy close writes a closed event" \
+    '{"seq":2,"type":"closed","reason":"agent"}' \
+    "$(tail -n 1 "$session/events.jsonl")"
+  rm -f "$session"/in.lock.*
+}
+
+# send_big <dir> <id> [env...] : start a background live send of a line over
+# the pipe buffer; sets SEND_PID.
+send_big() {
+  local big
+  big="$(head -c 300000 /dev/zero | tr '\0' a)"
+  env TMPDIR="$WRAP_TMP" "${@:3}" "$WRAPPER" live send "$1" \
+    "{\"id\":$2,\"k\":\"$big\"}" >/dev/null 2>&1 &
+  SEND_PID=$!
+}
+
+# received_ids <file> <count> : wait for count lines, stop the reader, then
+# print their ids and payload lengths in order, or nothing if a line is torn.
+received_ids() {
+  local tries=50
+  while ((tries-- > 0)) && (($(count_messages "$1") < $2)); do
+    sleep 0.1
+  done
+  kill "$READER_PID" 2>/dev/null || true
+  jq -rs '"\(map(.id) | join(",")) \(map(.k | length) | join(","))"' \
+    "$1" 2>/dev/null || true
+}
+
+# wrap_bg_small <dir> : start a background live send of a short line;
+# sets SEND_PID.
+wrap_bg_small() {
+  env TMPDIR="$WRAP_TMP" "$WRAPPER" live send "$1" '{"id":2}' \
+    >/dev/null 2>&1 &
+  SEND_PID=$!
+}
+
+# lock_links <dir> : names of the session's send lock links, one per line.
+lock_links() {
+  find "$1" -maxdepth 1 -name 'in.lock*' -exec basename {} \; | sort
+}
+
+# held_locks <dir> : send lock links not yet released, one per line.
+held_locks() {
+  local link
+  for link in "$1"/in.lock.*; do
+    if [[ "$link" =~ \.[0-9]+$ && ! -e "$link.done" ]]; then
+      basename "$link"
+    fi
+  done
+}
+
+# fifo_writers <dir> : number of bash processes other than the viewer that
+# have the session FIFO open. lsof by path misses FIFOs here, so filter all.
+fifo_writers() {
+  lsof -n -P -c bash -Fpn 2>/dev/null |
+    awk -v suffix="/${1##*/}/in" -v viewer="$(session_pid_of "$1")" '
+      /^p/ { pid = substr($0, 2) }
+      /^n/ && pid != viewer && substr($0, length($0) - length(suffix) + 1) \
+        == suffix { seen[pid] = 1 }
+      END { n = 0; for (p in seen) n++; print n }'
+}
+
+# Two senders both find the same dead owner before either takes over; a
+# slow readlink holds them in that window. Only one may write at a time.
+test_wrapper_stale_lock_race() {
+  skip_unless_macos "stale send lock race" || return 0
+  new_tmpdir WRAP_TMP
+  local session out="$WRAP_TMP/received" shim="$WRAP_TMP/shim" real first got
+  real="$(command -v readlink)"
+  fake_session session live '{"seq":1,"type":"ready"}'
+  ln -s "$(dead_pid)" "$session/in.lock.1"
+  mkdir "$shim"
+  # The first call pauses less, so one sender takes over while the other
+  # still holds the stale owner it read.
+  cat >"$shim/readlink" <<EOF
+#!/bin/bash
+"$real" "\$@"
+rc=\$?
+if mkdir "$shim/first" 2>/dev/null; then sleep 0.3; else sleep 0.8; fi
+exit \$rc
+EOF
+  chmod +x "$shim/readlink"
+  send_big "$session" 1 PATH="$shim:$PATH"
+  first="$SEND_PID"
+  send_big "$session" 2 PATH="$shim:$PATH"
+  # Both are past the takeover by now; one writes, the other waits its turn.
+  sleep 2
+  assert_eq "one racing sender holds the FIFO" "1" "$(fifo_writers "$session")"
+  read_fifo "$session" "$out"
+  assert "first racing sender exits 0" wait "$first"
+  assert "second racing sender exits 0" wait "$SEND_PID"
+  got="$(received_ids "$out" 2)"
+  assert "racing takeovers do not interleave ($got)" \
+    test "$got" == "1,2 300000,300000" -o "$got" == "2,1 300000,300000"
+  assert "racing senders release their locks" \
+    test "$(held_locks "$session")" == in.lock.1
+}
+
+# A waiter reads the owner of in.lock.N, then that owner releases and a new
+# sender takes the next lock. The waiter then finds its stale owner dead and
+# must not take a lock beside the new holder.
+test_wrapper_released_lock_reuse() {
+  skip_unless_macos "released send lock reuse" || return 0
+  new_tmpdir WRAP_TMP
+  local session out="$WRAP_TMP/received" shim="$WRAP_TMP/shim" real
+  local first waiter tries=50
+  real="$(command -v readlink)"
+  fake_session session live '{"seq":1,"type":"ready"}'
+  mkdir "$shim"
+  # Hold the waiter after its first readlink until the test lets it go.
+  cat >"$shim/readlink" <<EOF
+#!/bin/bash
+"$real" "\$@"
+rc=\$?
+if mkdir "$shim/read" 2>/dev/null; then
+  while [[ ! -e "$shim/go" ]]; do sleep 0.05; done
+fi
+exit \$rc
+EOF
+  chmod +x "$shim/readlink"
+  send_big "$session" 1
+  first="$SEND_PID"
+  while ((tries-- > 0)) && [[ -z "$(lock_links "$session")" ]]; do
+    sleep 0.1
+  done
+  sleep 0.3
+  send_big "$session" 2 PATH="$shim:$PATH"
+  waiter="$SEND_PID"
+  tries=50
+  while ((tries-- > 0)) && [[ ! -e "$shim/read" ]]; do
+    sleep 0.1
+  done
+  # Let the first sender finish and release, then stop reading again.
+  read_fifo "$session" "$out"
+  assert "first sender exits 0" wait "$first"
+  assert_eq "first line arrives whole" "1 300000" "$(received_ids "$out" 1)"
+  send_big "$session" 3
+  sleep 0.5
+  touch "$shim/go"
+  sleep 0.5
+  assert_eq "one sender holds the FIFO after a release" "1" \
+    "$(fifo_writers "$session")"
+  read_fifo "$session" "$out.next"
+  assert "waiting sender exits 0" wait "$waiter"
+  assert "new sender exits 0" wait "$SEND_PID"
+  assert_eq "senders after a release do not interleave" \
+    "3,2 300000,300000" "$(received_ids "$out.next" 2)"
+  assert "senders after a release free their locks" \
+    test -z "$(held_locks "$session")"
+}
+
+# A wrapper killed while its write is blocked leaves its writer running; the
+# next sender must wait for that writer instead of writing alongside it.
+test_wrapper_killed_sender() {
+  skip_unless_macos "killed sender" || return 0
+  new_tmpdir WRAP_TMP
+  local session out="$WRAP_TMP/received" first tries=50
+  fake_session session live '{"seq":1,"type":"ready"}'
+  send_big "$session" 1
+  first="$SEND_PID"
+  while ((tries-- > 0)) && [[ -z "$(lock_links "$session")" ]]; do
+    sleep 0.1
+  done
+  # Let the writer fill the pipe and block, then kill only the wrapper.
+  sleep 0.3
+  kill -9 "$first"
+  wait "$first" 2>/dev/null || true
+  wrap_bg_small "$session"
+  sleep 0.5
+  read_fifo "$session" "$out"
+  assert "send after a killed sender exits 0" wait "$SEND_PID"
+  assert_eq "killed sender's line arrives whole, then the next" \
+    "1,2 300000,0" \
+    "$(received_ids "$out" 2)"
+  assert "writer of the killed sender releases its lock" \
+    test -z "$(held_locks "$session")"
+}
+
+# Killing the sender's whole process group mid-write kills its writer too and
+# leaves a partial line in the FIFO; the next message must still arrive whole.
+test_wrapper_killed_sender_group() {
+  skip_unless_macos "killed sender group" || return 0
+  new_tmpdir WRAP_TMP
+  local session out="$WRAP_TMP/received" group tries=50 tree
+  fake_session session live '{"seq":1,"type":"ready"}'
+  # Job control puts the background wrapper in its own process group.
+  set -m
+  send_big "$session" 1
+  set +m
+  group="$SEND_PID"
+  while ((tries-- > 0)) && [[ -z "$(lock_links "$session")" ]]; do
+    sleep 0.1
+  done
+  # Let the writer fill the pipe and block, then kill the group and tree.
+  sleep 0.3
+  tree="$(descendants "$group")"
+  # shellcheck disable=SC2086 # one pid per word
+  kill -KILL $tree "$group" 2>/dev/null || true
+  kill -KILL -- -"$group" 2>/dev/null || true
+  wait "$group" 2>/dev/null || true
+  wrap_bg_small "$session"
+  sleep 0.5
+  read_fifo "$session" "$out"
+  assert "send after a killed sender group exits 0" wait "$SEND_PID"
+  tries=50
+  while ((tries-- > 0)) && ! grep -q '"id":2' "$out"; do
+    sleep 0.1
+  done
+  kill "$READER_PID" 2>/dev/null || true
+  assert "killed writer left a partial line" \
+    test "$(grep -c '^{"id":1,"k":"a*$' "$out")" == 1
+  assert_eq "next message arrives intact on its own line" '{"id":2}' \
+    "$(grep '"id":2' "$out")"
+}
+
+# The window closes between live wait reading new events and checking for
+# closed: the final events must still be printed.
+test_wrapper_wait_close_race() {
+  skip_unless_macos "wait racing a close" || return 0
+  new_tmpdir WRAP_TMP
+  local session shim="$WRAP_TMP/shim" real
+  real="$(command -v jq)"
+  fake_session session live '{"seq":1,"type":"ready"}'
+  printf '1\n' >"$session/cursor"
+  mkdir "$shim"
+  # A jq that appends the final events right after the first new_events call.
+  cat >"$shim/jq" <<EOF
+#!/bin/bash
+"$real" "\$@"
+rc=\$?
+if [[ "\$*" == *"--argjson c"* && ! -e "$shim/done" ]]; then
+  : >"$shim/done"
+  printf '%s\n' '{"seq":2,"type":"answer","data":7}' \\
+    '{"seq":3,"type":"closed","reason":"answer"}' >>"$session/events.jsonl"
+fi
+exit \$rc
+EOF
+  chmod +x "$shim/jq"
+  run_capture env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" \
+    "$WRAPPER" live wait "$session" --wait 5
+  assert_eq "wait racing a close exits 1" "1" "$RC"
+  assert_eq "wait racing a close prints the final events" \
+    '{"seq":2,"type":"answer","data":7}
+{"seq":3,"type":"closed","reason":"answer"}' "$OUT"
+}
+
+# --wait values with leading zeros are decimal, not octal.
+test_wrapper_wait_decimal() {
+  skip_unless_macos "decimal --wait" || return 0
   new_tmpdir WRAP_TMP
   local session
-  live_pid
+  fake_session session live '{"seq":1,"type":"ready"}'
+  wrap - live wait "$session" --wait 08
+  assert_eq "live wait accepts --wait 08" "0" "$RC"
+  assert_eq "live wait --wait 08 prints the event" \
+    '{"seq":1,"type":"ready"}' "$OUT"
+  fake_session session live '{"seq":1,"type":"ready"}' \
+    '{"seq":2,"type":"answer","data":1}' \
+    '{"seq":3,"type":"closed","reason":"answer"}'
+  wrap - ask --resume "$session" --wait 09
+  assert_eq "ask accepts --wait 09" "0" "$RC"
+  assert_eq "ask --wait 09 prints the answer" "1" "$OUT"
+}
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}' \
+test_wrapper_resume_outcomes() {
+  skip_unless_macos "resume outcomes" || return 0
+  new_tmpdir WRAP_TMP
+  local session
+
+  fake_session session live '{"seq":1,"type":"ready"}' \
     '{"seq":2,"type":"answer","data":{"month":7}}' \
     '{"seq":3,"type":"closed","reason":"answer"}'
   wrap - ask --resume "$session" --wait 0
   assert_eq "resume after an answer exits 0" "0" "$RC"
   assert_eq "resume prints the answer" '{"month":7}' "$OUT"
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}' \
+  fake_session session live '{"seq":1,"type":"ready"}' \
     '{"seq":2,"type":"closed","reason":"user"}'
   wrap - ask --resume "$session" --wait 0
   assert_eq "resume after a user close exits 1" "1" "$RC"
   assert "user close prints no answer" test -z "$OUT"
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}' \
+  fake_session session live '{"seq":1,"type":"ready"}' \
     '{"seq":2,"type":"closed","reason":"timeout"}'
   wrap - ask --resume "$session" --wait 0
   assert_eq "resume after a window timeout exits 1, not 4" "1" "$RC"
   assert "window timeout is reported" \
     contains "window timed out without an answer" "$ERR"
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}' \
+  fake_session session live '{"seq":1,"type":"ready"}' \
     '{"seq":2,"type":"closed","reason":"error","message":"boom"}'
   wrap - ask --resume "$session" --wait 0
   assert_eq "resume after an error exits 3" "3" "$RC"
   assert "error message is passed on" contains "boom" "$ERR"
 
-  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}'
+  fake_session session live '{"seq":1,"type":"ready"}'
   wrap - ask --resume "$session" --wait 0
   assert_eq "resume of an open window exits 4" "4" "$RC"
   assert "open window gets a resume hint" contains "still waiting" "$ERR"
@@ -1065,16 +1463,11 @@ test_wrapper_resume_outcomes() {
 # A viewer that never reads its FIFO: live close must terminate it and still
 # leave a closed event behind.
 test_wrapper_close_stuck() {
+  skip_unless_macos "close of a stuck viewer" || return 0
   new_tmpdir WRAP_TMP
   local session stuck
-  # Not our child, so once killed it is reaped and kill -0 fails.
-  (
-    exec -a "$FAKE_VIEWER_NAME" sleep 120 >/dev/null 2>&1 &
-    printf '%s' "$!" >"$WRAP_TMP/stuck"
-  )
-  stuck="$(cat "$WRAP_TMP/stuck")"
-  track_pid "$stuck"
-  fake_session session "$stuck" '{"seq":1,"type":"ready"}'
+  fake_session session live '{"seq":1,"type":"ready"}'
+  stuck="$(session_pid_of "$session")"
   wrap - live close "$session"
   assert_eq "close of a stuck viewer exits 0" "0" "$RC"
   assert "stuck viewer is reported" contains "terminating it" "$ERR"
@@ -1084,6 +1477,33 @@ test_wrapper_close_stuck() {
     "$(tail -n 1 "$session/events.jsonl")"
   wrap - live wait "$session" --wait 0
   assert_eq "wait after a forced close exits 1, not 5" "1" "$RC"
+}
+
+# Two closes terminating the same stuck viewer append one closed event; a
+# slow tail holds each between its closed check and its append.
+test_wrapper_concurrent_close() {
+  skip_unless_macos "concurrent close of a stuck viewer" || return 0
+  new_tmpdir WRAP_TMP
+  local session shim="$WRAP_TMP/shim" real first
+  real="$(command -v tail)"
+  fake_session session live '{"seq":1,"type":"ready"}'
+  mkdir "$shim"
+  cat >"$shim/tail" <<EOF
+#!/bin/bash
+sleep 0.5
+exec "$real" "\$@"
+EOF
+  chmod +x "$shim/tail"
+  env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" live close \
+    "$session" >/dev/null 2>&1 &
+  first=$!
+  run_capture env TMPDIR="$WRAP_TMP" PATH="$shim:$PATH" "$WRAPPER" \
+    live close "$session"
+  assert_eq "second concurrent close exits 0" "0" "$RC"
+  assert "first concurrent close exits 0" wait "$first"
+  assert_eq "concurrent closes append one closed event" \
+    $'{"seq":1,"type":"ready"}\n{"seq":2,"type":"closed","reason":"agent"}' \
+    "$(grep . "$session/events.jsonl")"
 }
 
 # stub_wrap <stub body> <args...> : run the wrapper with a fake viewer whose
@@ -1102,7 +1522,7 @@ stub_wrap() {
 test_wrapper_startup() {
   skip_unless_macos "wrapper startup with fake viewers" || return 0
   new_tmpdir WRAP_TMP
-  local page="$FIXTURES/basic.html" ev pid start session
+  local page="$FIXTURES/basic.html" ev pid start session big
   # shellcheck disable=SC2016 # stub shell code, expanded by the stub
   ev='printf "%s\n" "$1" >>"$DIR/events.jsonl"'
   local head="DIR=\$3; ev() { $ev; }"
@@ -1113,7 +1533,7 @@ test_wrapper_startup() {
   local answered='{"seq":2,"type":"closed","reason":"answer"}'
   local timed_out='{"seq":1,"type":"closed","reason":"timeout"}'
 
-  stub_wrap "$head; ev '$ready'; exec -a \"\$0\" sleep 60" show "$page"
+  stub_wrap "$head; ev '$ready'; idle 60" show "$page"
   assert_eq "show with a ready viewer exits 0" "0" "$RC"
   session="$OUT"
   pid="$(session_pid_of "$session")"
@@ -1122,6 +1542,17 @@ test_wrapper_startup() {
   assert_eq "viewer is not a child of the wrapper" "1" \
     "$(ps -o ppid= -p "$pid" | tr -d ' ')"
   kill "$pid"
+
+  # A large log after ready: has_event must not fail on SIGPIPE.
+  big="$WRAP_TMP/big.jsonl"
+  {
+    printf '%s\n' "$ready"
+    jq -cn 'range(2; 6000) | {seq: ., type: "message", data: ("x" * 40)}'
+  } >"$big"
+  stub_wrap "$head; cat '$big' >>\"\$DIR/events.jsonl\"; idle 60" \
+    show "$page"
+  assert_eq "show with a large event log exits 0" "0" "$RC"
+  kill "$(session_pid_of "$OUT")" 2>/dev/null || true
 
   stub_wrap 'echo "stub viewer broke" >&2; exit 2' show "$page"
   assert_eq "viewer dying without events exits 5" "5" "$RC"
@@ -1142,8 +1573,7 @@ test_wrapper_startup() {
   assert_eq "ask with a window timeout before ready exits 1" "1" "$RC"
 
   start=$SECONDS
-  # shellcheck disable=SC2016 # stub shell code, expanded by the stub
-  stub_wrap 'exec -a "$0" sleep 60' show "$page"
+  stub_wrap 'idle 60' show "$page"
   assert_eq "page never ready exits 3" "3" "$RC"
   assert "not-ready wait is bounded" test $((SECONDS - start)) -le 15
   assert "not-ready is reported" contains "page not ready" "$ERR"
@@ -1396,6 +1826,25 @@ test_template_headless() {
     contains '"data":{"hidden":false,"text":"Total43,929 GWh"}' "$events"
   wrap - live close "$session"
   assert_eq "template window closes" "0" "$RC"
+
+  new_tmpdir WRAP_TMP
+  wrap template-enter.js ask "$TEMPLATE" --timeout 20
+  assert_eq "template Return answers" '{"ok":true}' "$OUT"
+  events="$(cat "$WRAP_TMP"/html-popup.*/events.jsonl)"
+  assert "Return in a contenteditable does not answer" \
+    contains '"data":"contenteditable"' "$events"
+  assert "Return with preventDefault does not answer" \
+    contains '"data":"prevented"' "$events"
+
+  # SKILL.md says to delete the Details button and panel outside live mode.
+  new_tmpdir WRAP_TMP
+  sed -e '/id="send"/d' -e '/id="details"/d' \
+    -e 's|^</script>|window.templateInitialized = true;\n</script>|' \
+    "$TEMPLATE" >"$WRAP_TMP/page.html"
+  assert "stripped template has no Details button" \
+    not_contains 'id="send"' "$(cat "$WRAP_TMP/page.html")"
+  wrap template-init.js ask "$WRAP_TMP/page.html" --timeout 20
+  assert_eq "stripped template answers" '{"initialized":true}' "$OUT"
 }
 
 # --- Tests: solar example -----------------------------------------------------
@@ -1510,6 +1959,7 @@ main() {
   test_bridge_data
   test_bridge_escape
   test_bridge_raw_posts
+  test_bridge_child_frame
   test_viewer_size
   test_bridge_bad_data
   test_inbound_echo
@@ -1518,8 +1968,17 @@ main() {
   test_wrapper_args
   test_wrapper_fake_sessions
   test_wrapper_recycled_pid
+  test_wrapper_session_identity
+  test_wrapper_concurrent_sends
+  test_wrapper_stale_lock_race
+  test_wrapper_released_lock_reuse
+  test_wrapper_killed_sender
+  test_wrapper_killed_sender_group
+  test_wrapper_wait_close_race
+  test_wrapper_wait_decimal
   test_wrapper_resume_outcomes
   test_wrapper_close_stuck
+  test_wrapper_concurrent_close
   test_wrapper_startup
   test_wrapper_show
   test_wrapper_ask

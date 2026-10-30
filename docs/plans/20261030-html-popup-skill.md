@@ -190,7 +190,7 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   (window lifetime). `--wait SEC` = how long this one CLI call blocks,
   counted from the start of the call (so a first-use compile and the page
   load count too), default 100 s — below the Bash tool's 120 s default
-  timeout.
+  timeout. `--wait` is whole seconds, read as decimal (`08` is 8).
 - **Detaching**: the viewer is started with a double fork,
   `( "$viewer" ... </dev/null >>"$DIR/viewer.log" 2>&1 & echo $! >"$DIR/pid" )`,
   so it is reparented to launchd at once and is never a descendant of the
@@ -215,26 +215,46 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   `still waiting; resume with: html-popup.sh ask --resume <DIR>`. The
   window stays open; exit 4 always means that.
 - **Viewer liveness**: a session pid counts as its viewer only while
-  `kill -0` succeeds and `ps -o comm=` ends in `html-popup-viewer-*`. A
-  viewer that died without `closed` may have its pid recycled; such a pid is
-  treated as dead and never signalled. Startup polls plain `kill -0`, since
+  `kill -0` succeeds, `ps -o comm=` ends in `html-popup-viewer-*` and
+  `ps -o args=` holds `--session DIR` for this session's DIR (compared with
+  `-ef`). A viewer that died without `closed` may have its pid recycled, by
+  an unrelated process or another session's viewer; such a pid is treated
+  as dead and never signalled. Startup polls plain `kill -0`, since
   the fresh child is a bash subshell until it execs the viewer.
 - **`live send`**: validate with `jq -c` (exit 2 if it is not exactly one
   JSON value); if the session has a `closed` event or a dead pid → exit 1;
-  otherwise a background subshell writes the line through a read-write open
-  of `DIR/in`. That open never blocks, but a write larger than the pipe
-  buffer does until the viewer reads it, so the wrapper kills the writer and
-  exits 1 if the viewer dies meanwhile.
+  otherwise a background writer process takes the per-session send lock and
+  writes the line to `DIR/in` (opened write-only via a read-write open, so
+  the open never blocks and a dead viewer fails the write instead of
+  hanging it). A write larger than the pipe buffer blocks until the viewer
+  reads it, so the wrapper kills the writer and exits 1 if the viewer dies
+  meanwhile. The lock exists because pipe writes over `PIPE_BUF`
+  interleave. It is owned by the writer, not the wrapper, so a killed
+  wrapper whose writer still runs keeps it. Lock links are
+  `DIR/in.lock.N` → owner pid and the highest N counts; N is free once
+  `DIR/in.lock.N.done` exists (normal release) or its owner is dead. No
+  lock file is ever deleted, so a name is never reused: the next sender
+  creates N+1 with `ln -s`, and racing takers have exactly one winner even
+  when one acted on a stale read. Leftover files are bounded by the
+  session's sends and go with the session dir. Each send writes `"\n" + JSON + "\n"`:
+  a writer killed mid-write leaves a partial line, and the leading newline
+  ends it, so the viewer drops that fragment as invalid and the next message
+  arrives whole.
 - **`live wait`**: keeps the last consumed `seq` in `DIR/cursor`; consumes
   only complete (newline-terminated) lines; polls every 0.2 s.
   - Prints the new events and exits 0 if they contain no `closed`.
   - Exits 1 if the printed batch contains `closed`, or `closed` was already
     consumed (returns at once).
   - Exits 5 if the pid is dead and no `closed` was written (viewer crashed).
+  - Before exiting 1 or 5 it reads new events once more, so events written
+    just before `closed` are always printed.
   - Exits 4 when `--wait` expires with nothing new.
-- **`live close`**: write the close line, wait up to 5 s for `closed`; if it
+- **`live close`**: write the close line (giving up after 5 s if the send
+  lock or the write stays blocked), wait up to 5 s for `closed`; if it
   does not come, SIGTERM the viewer (SIGKILL after 5 s more) and append the
-  `closed` event (`reason: agent`) itself. Exit 0, also when the viewer was
+  `closed` event (`reason: agent`) itself. Concurrent closes serialize that
+  append with `mkdir DIR/close.lock` (never removed): the winner appends one
+  `closed`, the others wait up to 5 s for it. Exit 0, also when the viewer was
   already gone. Keeps `events.jsonl` for reading.
 - **Build cache**: `${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}`,
   binary `html-popup-viewer-<12 hex of sha256>`; compile to
@@ -242,8 +262,10 @@ html-popup.sh live close DIR            # close the window (ok if already gone)
   Compiler: `$HTML_POPUP_SWIFTC` or else `xcrun swiftc` (the Xcode toolchain
   with the AppKit/WebKit SDK, not an OSS `swiftc` first in PATH); presence
   is checked with `xcrun --find swiftc`, because `/usr/bin/swiftc` exists as
-  a shim even without the Command Line Tools. After a fresh build, binaries
-  of older sources and temp files of finished builds are removed.
+  a shim even without the Command Line Tools. Each use touches the cached
+  binary; after a fresh build, viewer binaries and temp files unused for
+  over a day are removed, so concurrent plugin versions sharing the cache
+  never delete each other's fresh binary.
 - **Session dirs**: `mktemp -d "${TMPDIR:-/tmp}/html-popup.XXXXXX"`.
   `show`/`ask`/`live start` remove `html-popup.*` dirs older than one day
   whose pid is dead. A session without `--timeout` stays open until the user

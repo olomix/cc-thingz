@@ -245,7 +245,7 @@ html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
 cache dir, while its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
 `swiftc` is installed and the session is a GUI (Aqua) login, and tests that
-run the wrapper's build step are skipped off macOS.
+run the wrapper's build step or fake viewers are skipped off macOS.
 
 ## License
 

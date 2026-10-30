@@ -33,14 +33,16 @@ if [[ -n "${FAKE_SWIFTC_FAIL:-}" ]]; then
   exit 1
 fi
 
-# The wrapper only trusts processes named like the viewer, so the stub
-# re-execs itself with its own path as argv[0] (a plain script shows as bash).
-# Long-lived bodies should use `exec -a "$0" sleep N` to keep that name.
+# The wrapper only trusts a process named like the viewer whose arguments
+# hold --session DIR, so the stub re-execs itself with its own path as argv[0]
+# (a plain script shows as bash) and keeps its arguments. Long-lived bodies
+# call `idle N`: short sleeps leave no orphan behind when the stub is killed.
 cat >"$out" <<EOF
 #!/bin/bash
 if [[ -z "\${FAKE_VIEWER_NAMED:-}" ]]; then
   FAKE_VIEWER_NAMED=1 exec -a "\$0" /bin/bash "\$0" "\$@"
 fi
+idle() { local i; for ((i = 0; i < \$1 * 5; i++)); do sleep 0.2; done; }
 ${FAKE_SWIFTC_BODY:-exit 0}
 EOF
 chmod +x "$out"

@@ -128,7 +128,7 @@ viewer_path() {
 # build_viewer : compile the viewer unless cached; print its path.
 build_viewer() {
   (($# == 0)) || die "unexpected argument: $1"
-  local failed=0 bin tmp old
+  local failed=0 bin tmp
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
@@ -136,24 +136,23 @@ build_viewer() {
   [[ -r "$VIEWER_SRC" ]] || die "viewer source not found: $VIEWER_SRC"
 
   bin="$(viewer_path)"
-  if [[ ! -x "$bin" ]]; then
-    # A per-process temp name plus an atomic mv keeps concurrent first uses
-    # from running a half-written binary.
-    tmp="$bin.tmp.$$"
-    if ! "${SWIFTC[@]}" -O -o "$tmp" "$VIEWER_SRC" >&2; then
-      rm -f "$tmp"
-      die "failed to compile the viewer"
-    fi
-    mv -f "$tmp" "$bin"
-    # Drop binaries of older sources; keep temp files of builds still running.
-    for old in "$CACHE_DIR"/html-popup-viewer-*; do
-      case "$old" in
-        "$bin") ;;
-        *.tmp.*) pid_alive "${old##*.tmp.}" || rm -f "$old" ;;
-        *) rm -f "$old" ;;
-      esac
-    done
+  # Touch on use: pruning below spares binaries used within the last day.
+  if [[ -x "$bin" ]] && touch "$bin"; then
+    printf '%s\n' "$bin"
+    return 0
   fi
+  # A per-process temp name plus an atomic mv keeps concurrent first uses
+  # from running a half-written binary.
+  tmp="$bin.tmp.$$"
+  if ! "${SWIFTC[@]}" -O -o "$tmp" "$VIEWER_SRC" >&2; then
+    rm -f "$tmp"
+    die "failed to compile the viewer"
+  fi
+  mv -f "$tmp" "$bin"
+  # Other plugin versions may build or launch their binary right now, so
+  # drop only binaries and temp files unused for over a day.
+  find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' -mtime +0 \
+    -exec rm -f {} + 2>/dev/null || true
   printf '%s\n' "$bin"
 }
 
@@ -166,19 +165,29 @@ require_jq() {
   return 0
 }
 
-# parse_wait <value> : validate a --wait value (whole seconds).
+# parse_wait <value> : validate a --wait value (whole seconds) and print it
+# in decimal; arithmetic would read a leading zero as octal.
 parse_wait() {
   [[ "$1" =~ ^[0-9]+$ ]] || die "bad --wait: $1 (whole seconds)"
-  printf '%s' "$1"
+  printf '%s' "$((10#$1))"
 }
 
-# viewer_alive <pid> : true when pid is a running viewer. A dead viewer's pid
-# may be recycled, so an unrelated process must never count as the session.
+# viewer_alive <dir> <pid> : true when pid is the viewer of session dir. A
+# dead viewer's pid may be recycled by an unrelated process or by another
+# session's viewer, so check the name and the --session argument.
 viewer_alive() {
-  local comm
-  pid_alive "$1" || return 1
-  comm="$(ps -ww -p "$1" -o comm= 2>/dev/null)" || return 1
-  [[ "${comm##*/}" == html-popup-viewer-* ]]
+  local comm args rest
+  pid_alive "$2" || return 1
+  comm="$(ps -ww -p "$2" -o comm= 2>/dev/null)" || return 1
+  [[ "${comm##*/}" == html-popup-viewer-* ]] || return 1
+  args="$(ps -ww -p "$2" -o args= 2>/dev/null)" || return 1
+  # The page path or title may contain " --session ", so try each one.
+  rest="$args"
+  while [[ "$rest" == *" --session "* ]]; do
+    rest="${rest#* --session }"
+    [[ "${rest%% --*}" -ef "$1" ]] && return 0
+  done
+  return 1
 }
 
 session_pid() {
@@ -203,11 +212,12 @@ complete_events() {
 }
 
 # has_event <dir> <type>... : true when a complete event of one of those
-# types exists.
+# types exists. jq reads all input: stopping at a match would SIGPIPE the
+# writer and fail the pipeline under pipefail.
 has_event() {
   complete_events "$1" |
-    jq -e -n 'any(inputs; .type | IN($ARGS.positional[]))' --args "${@:2}" \
-      >/dev/null 2>&1
+    jq -e -n '[inputs | select(.type | IN($ARGS.positional[]))] | any' \
+      --args "${@:2}" >/dev/null 2>&1
 }
 
 # SECONDS truncates to whole seconds, so "SECONDS > end" never ends a wait
@@ -230,8 +240,8 @@ need_value() {
 # those types.
 first_event() {
   complete_events "$1" |
-    jq -c 'select(.type | IN($ARGS.positional[]))' --args "${@:2}" \
-      2>/dev/null | head -n 1
+    jq -c -n '[inputs | select(.type | IN($ARGS.positional[]))][0] // empty' \
+      --args "${@:2}" 2>/dev/null
 }
 
 # new_events <dir> <cursor> : print complete events with seq above cursor.
@@ -244,15 +254,25 @@ new_events() {
 # not close by itself and append the closed event it could not write.
 terminate_viewer() {
   local dir="$1" pid="$2" file="$1/events.jsonl" seq
-  if viewer_alive "$pid"; then
+  if viewer_alive "$dir" "$pid"; then
     kill "$pid" 2>/dev/null || true
     deadline_start "$CLOSE_WAIT"
-    while viewer_alive "$pid" && ! deadline_passed; do
+    while viewer_alive "$dir" "$pid" && ! deadline_passed; do
       sleep "$POLL"
     done
-    if viewer_alive "$pid"; then
+    if viewer_alive "$dir" "$pid"; then
       kill -9 "$pid" 2>/dev/null || true
     fi
+  fi
+  has_event "$dir" closed && return 0
+  # Concurrent closes may all get here: only the mkdir winner appends, the
+  # others wait for its event. The lock dir is never removed.
+  if ! mkdir "$dir/close.lock" 2>/dev/null; then
+    deadline_start "$CLOSE_WAIT"
+    until has_event "$dir" closed || deadline_passed; do
+      sleep "$POLL"
+    done
+    return 0
   fi
   has_event "$dir" closed && return 0
   if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then
@@ -269,7 +289,7 @@ terminate_viewer() {
 remove_stale_sessions() {
   local dir
   while IFS= read -r dir; do
-    viewer_alive "$(session_pid "$dir")" || rm -rf "$dir"
+    viewer_alive "$dir" "$(session_pid "$dir")" || rm -rf "$dir"
   done < <(find "$TMP_ROOT" -maxdepth 1 -type d -name 'html-popup.*' \
     -mtime +0 2>/dev/null)
 }
@@ -396,7 +416,7 @@ wait_answer() {
         *) die "window closed without an answer" 1 ;;
       esac
     fi
-    if ! viewer_alive "$pid"; then
+    if ! viewer_alive "$dir" "$pid"; then
       has_event "$dir" answer closed && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
@@ -450,32 +470,85 @@ cmd_ask() {
   wait_answer "$dir" "$((wait > SECONDS ? wait - SECONDS : 0))"
 }
 
-# write_inbound <dir> <line> : write one line to the session FIFO. The
-# read-write open never blocks, but a write larger than the pipe buffer does
-# until the viewer reads it, so give up if the viewer dies meanwhile.
+# lock_inbound <dir> <pid> : take the session's send lock for the calling
+# writer process and set INBOUND_LOCK; returns 1 if the viewer dies first.
+# Pipe writes over PIPE_BUF are not atomic, so concurrent senders would
+# interleave long lines. Locks are symlinks in.lock.N to the owner's pid and
+# the highest N counts; N is free once in.lock.N.done exists or its owner
+# died. No lock file is ever removed, so names are never reused and takers
+# race on ln -s of N+1 with exactly one winner.
+lock_inbound() {
+  local dir="$1" me top n link
+  # $BASHPID needs bash 4; the background writer must name itself.
+  me="$(exec sh -c 'printf %s "$PPID"')"
+  while :; do
+    top=0
+    for link in "$dir"/in.lock.*; do
+      n="${link##*.}"
+      if [[ "$n" =~ ^[1-9][0-9]*$ ]] && ((n > top)); then
+        top="$n"
+      fi
+    done
+    if ((top > 0)) && [[ ! -e "$dir/in.lock.$top.done" ]] &&
+      pid_alive "$(readlink "$dir/in.lock.$top")"; then
+      viewer_alive "$dir" "$2" || return 1
+      sleep "$FIFO_POLL"
+      continue
+    fi
+    INBOUND_LOCK="$dir/in.lock.$((top + 1))"
+    ln -s "$me" "$INBOUND_LOCK" 2>/dev/null && return 0
+  done
+}
+
+# send_line <dir> <pid> <line> : the background writer. It owns the send
+# lock while it may write, so a killed wrapper cannot free the lock early.
+send_line() {
+  local rc=0
+  lock_inbound "$1" "$2" || exit 1
+  # Write-only, with the read-write open dropped once it served to open
+  # without blocking: if the viewer dies, the write fails instead of hanging.
+  exec 4<>"$1/in"
+  exec 3>"$1/in" 4<&-
+  # The leading newline ends any partial line a killed writer left behind,
+  # so the viewer drops that fragment instead of this message.
+  printf '\n%s\n' "$3" >&3 || rc=1
+  : >"$INBOUND_LOCK.done"
+  exit "$rc"
+}
+
+# write_inbound <dir> <line> [limit] : write one line to the session FIFO.
+# A write larger than the pipe buffer blocks until the viewer reads it.
+# Returns 1 if the viewer dies meanwhile, 2 when the optional limit
+# (seconds) passes first.
 write_inbound() {
-  local dir="$1" line="$2" pid writer rc=0
+  local dir="$1" line="$2" limit="${3:-}" pid writer rc=0
   pid="$(session_pid "$dir")"
-  (
-    exec 3<>"$dir/in"
-    printf '%s\n' "$line" >&3
-  ) &
+  [[ -z "$limit" ]] || deadline_start "$limit"
+  send_line "$dir" "$pid" "$line" &
   writer=$!
   while pid_alive "$writer"; do
-    if ! viewer_alive "$pid"; then
-      kill "$writer" 2>/dev/null || true
-      wait "$writer" 2>/dev/null || true
-      return 1
+    if ! viewer_alive "$dir" "$pid"; then
+      rc=1
+    elif [[ -n "$limit" ]] && deadline_passed; then
+      rc=2
+    else
+      sleep "$FIFO_POLL"
+      continue
     fi
-    sleep "$FIFO_POLL"
+    kill "$writer" 2>/dev/null || true
+    break
   done
-  wait "$writer" || rc=$?
+  if ((rc == 0)); then
+    wait "$writer" || rc=1
+  else
+    wait "$writer" 2>/dev/null || true
+  fi
   return "$rc"
 }
 
 # session_over <dir> : true when the window has closed or its viewer is gone.
 session_over() {
-  has_event "$1" closed || ! viewer_alive "$(session_pid "$1")"
+  has_event "$1" closed || ! viewer_alive "$1" "$(session_pid "$1")"
 }
 
 cmd_live_send() {
@@ -524,9 +597,10 @@ cmd_live_wait() {
       fi
       exit 0
     fi
-    has_event "$dir" closed && exit 1
-    if ! viewer_alive "$pid"; then
+    if has_event "$dir" closed || ! viewer_alive "$dir" "$pid"; then
+      # The last events may have landed after the batch was read.
       [[ -n "$(new_events "$dir" "$cursor")" ]] && continue
+      has_event "$dir" closed && exit 1
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
     deadline_passed && exit 4
@@ -536,15 +610,17 @@ cmd_live_wait() {
 
 cmd_live_close() {
   (($# == 1)) || die "usage: html-popup.sh live close DIR"
-  local dir="$1" pid
+  local dir="$1" pid rc=0
   require_jq
   require_session "$dir"
   session_over "$dir" && return 0
   pid="$(session_pid "$dir")"
-  write_inbound "$dir" '{"htmlPopup":"close"}' || return 0
+  # Bounded: a viewer that stopped reading must not hang close.
+  write_inbound "$dir" '{"htmlPopup":"close"}' "$CLOSE_WAIT" || rc=$?
+  ((rc == 1)) && return 0
   deadline_start "$CLOSE_WAIT"
   until session_over "$dir"; do
-    if deadline_passed; then
+    if ((rc == 2)) || deadline_passed; then
       printf 'html-popup: window did not close in %ss; terminating it\n' \
         "$CLOSE_WAIT" >&2
       terminate_viewer "$dir" "$pid" agent

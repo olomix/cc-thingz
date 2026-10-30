@@ -47,7 +47,10 @@ P="${CLAUDE_PLUGIN_ROOT}/scripts/html-popup.sh"
   `preventDefault()` on the keydown.
 
 Values cross the bridge as JSON, so numbers, nesting and scalars survive.
-The template's Return key answers `{"ok":true}`.
+Only the top-level page can use the bridge; messages from iframes are ignored.
+The template's Return key answers `{"ok":true}`, except in inputs, buttons
+or contenteditable elements, or when a page listener calls
+`preventDefault()` on the keydown.
 
 ## Commands
 
@@ -66,7 +69,8 @@ The template's Return key answers `{"ok":true}`.
 `--size WxH` (default 980x640), `--timeout SEC` (window lifetime; default:
 open until closed). `--wait` = how long this call blocks, counted from its
 start (first-use compile and page load included), whole seconds, default
-100 (below the Bash tool's 120 s timeout).
+100 (below the Bash tool's 120 s timeout). Concurrent `live send` calls to
+one window are serialized.
 
 ## Flows
 

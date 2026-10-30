@@ -569,6 +569,12 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     func userContentController(_ controller: WKUserContentController,
                                didReceive message: WKScriptMessage) {
+        // Handlers are exposed to every frame; an embedded iframe must not
+        // be able to answer or close on the page's behalf.
+        guard message.frameInfo.isMainFrame else {
+            log("dropped bridge message from a child frame")
+            return
+        }
         guard let body = message.body as? [String: Any],
             let type = body["type"] as? String
         else {

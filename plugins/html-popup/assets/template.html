@@ -95,17 +95,22 @@
   const done = () => htmlPopup.answer({ ok: true });
   document.getElementById("answer").addEventListener("click", done);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.target.closest("input, textarea, select, button")) done();
+    if (e.key !== "Enter" || e.isComposing || e.target.isContentEditable) return;
+    if (e.target.closest?.("input, textarea, select, button")) return;
+    // Decide after dispatch, so a page listener added later can still
+    // call preventDefault() to keep the window open.
+    setTimeout(() => { if (!e.defaultPrevented) done(); }, 0);
   });
 
   // live mode: send() emits an event to the agent; the window stays open.
-  document.getElementById("send").addEventListener("click", () =>
+  // The Details button and panel may be deleted outside live mode.
+  document.getElementById("send")?.addEventListener("click", () =>
     htmlPopup.send({ action: "details" }));
 
   // live mode: the agent replies with {"details": {label: value, ...}}.
   htmlPopup.onMessage((msg) => {
-    if (!msg || !msg.details || typeof msg.details !== "object") return;
     const panel = document.getElementById("details");
+    if (!panel || !msg || !msg.details || typeof msg.details !== "object") return;
     panel.replaceChildren(...Object.entries(msg.details).map(([k, v]) => {
       const row = document.createElement("div");
       row.innerHTML = '<div class="k"></div><div class="v"></div>';
