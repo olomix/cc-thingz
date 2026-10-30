@@ -353,17 +353,23 @@ in Technical Details, and unregister/delete the bundle afterwards.
 
 **Files:**
 - Create: `plugins/html-popup/viewer/AppIcon.svg`
-- Create: `plugins/html-popup/viewer/make-icon.sh` (or `make-icon.swift`)
+- Create: `plugins/html-popup/viewer/make-icon.sh` and `make-icon.swift`
 - Create: `plugins/html-popup/viewer/AppIcon.icns`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] add `AppIcon.svg` with the SVG from Technical Details
-- [ ] write the dev script and run `shellcheck` on it
-- [ ] generate and commit `AppIcon.icns`; check that the area outside the
+- [x] add `AppIcon.svg` with the SVG from Technical Details
+- [x] write the dev script and run `shellcheck` on it
+- [x] generate and commit `AppIcon.icns`; check that the area outside the
       squircle is transparent
-- [ ] write a test: `AppIcon.svg` and `AppIcon.icns` exist (`.icns` starts
+- [x] write a test: `AppIcon.svg` and `AppIcon.icns` exist (`.icns` starts
       with the `icns` magic)
-- [ ] run tests — must pass before task 3
+- [x] run tests — must pass before task 3
+
+Result: `qlmanage -t` flattened the SVG onto a white background, so
+`make-icon.sh` renders the 1024 px master with `make-icon.swift` (NSImage
+loads the SVG, drawn into a clear RGBA bitmap; needs macOS 14+), then
+`sips`/`iconutil`. A 256 px preview from the `.icns` has alpha 0 in the
+margin and squircle corners.
 
 ### Task 3: Build the viewer into a cached .app bundle
 

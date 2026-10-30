@@ -169,6 +169,19 @@ test_manifest() {
       | .description // empty' "$MARKETPLACE")"
 }
 
+# --- Tests: app icon assets --------------------------------------------------
+
+test_icon_assets() {
+  local viewer="$PLUGIN_DIR/viewer"
+
+  assert "AppIcon.svg exists" test -s "$viewer/AppIcon.svg"
+  assert "AppIcon.svg is an SVG" contains "<svg" "$(cat "$viewer/AppIcon.svg")"
+  assert "AppIcon.icns exists" test -s "$viewer/AppIcon.icns"
+  assert_eq "AppIcon.icns has the icns magic" "icns" \
+    "$(head -c 4 "$viewer/AppIcon.icns")"
+  assert "make-icon.sh is executable" test -x "$viewer/make-icon.sh"
+}
+
 # --- Tests: harness helpers ---------------------------------------------------
 
 test_harness() {
@@ -2185,6 +2198,7 @@ test_skill() {
 
 main() {
   test_manifest
+  test_icon_assets
   test_harness
   test_dispatch
   test_build_cache
