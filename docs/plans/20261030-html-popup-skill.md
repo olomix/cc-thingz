@@ -393,27 +393,27 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Modify: `plugins/html-popup/scripts/html-popup.sh`
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] shared session start: stale-dir cleanup, validation before
+- [x] shared session start: stale-dir cleanup, validation before
       detaching, build, detached start with `</dev/null >>log 2>&1 & disown`,
       wait for `ready` while polling the pid; forward `HTML_POPUP_TEST_SCRIPT`
       as `--test-script`
-- [ ] implement `show`, `live start` (print DIR) and `ask` / `ask --resume`
+- [x] implement `show`, `live start` (print DIR) and `ask` / `ask --resume`
       with `--wait` (default 100 s) and the resume hint on exit 4
-- [ ] implement `live send` (jq validation, closed/pid check, `exec 3<>`
+- [x] implement `live send` (jq validation, closed/pid check, `exec 3<>`
       write), `live wait` (cursor, complete lines only, exit 0/1/4/5 as
       specified) and `live close` (idempotent)
-- [ ] run `shellcheck` and fix findings
-- [ ] write tests: `show` and `live start` return within 3 s while the
+- [x] run `shellcheck` and fix findings
+- [x] write tests: `show` and `live start` return within 3 s while the
       viewer stays alive; `ask` prints the answer JSON (test script answers);
       `ask --wait 1` → exit 4 with resume hint, then `ask --resume` gets the
       answer; full live round trip start → send → wait sees echo → close →
       wait exits 1
-- [ ] write tests for errors: missing page / invalid data → exit 3
+- [x] write tests for errors: missing page / invalid data → exit 3
       synchronously; send invalid JSON → 2; send after close → 1 without
       hanging; send racing a closing viewer never hangs (bounded by a
       watchdog); wait after `closed` returns 1 at once; viewer killed with
       `kill -9` → wait exits 5; `close` on a gone session → 0
-- [ ] run tests — must pass before task 7
+- [x] run tests — must pass before task 7
 
 ### Task 7: HTML starter template
 

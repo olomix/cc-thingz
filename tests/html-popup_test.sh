@@ -20,9 +20,18 @@ TEMP_DIRS=()
 # assert exits on the first failure, so viewers and temp dirs must be cleaned
 # up from a trap rather than at the end of each test.
 cleanup() {
-  local pid dir
+  local pid dir pidfile
   for pid in "${TRACKED_PIDS[@]+"${TRACKED_PIDS[@]}"}"; do
     kill "$pid" 2>/dev/null || true
+  done
+  # Viewers started through the wrapper are detached; their sessions live
+  # under our temp dirs, so find them by pid file.
+  for dir in "${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}"; do
+    for pidfile in "$dir"/html-popup.*/pid; do
+      [[ -f "$pidfile" ]] || continue
+      pid="$(tr -d '[:space:]' <"$pidfile")"
+      [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    done
   done
   for dir in "${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}"; do
     rm -rf "$dir"
@@ -665,6 +674,304 @@ test_inbound_invalid() {
   assert_eq "close reason is agent" "agent" "$(tail -n 1 "$EVENTS" | jq -r .reason)"
 }
 
+# --- Helpers: running the wrapper against sessions -----------------------------
+
+WRAPPER="$PLUGIN_DIR/scripts/html-popup.sh"
+WRAP_TMP=""
+
+# wrap <test script|-> <args...> : run the wrapper with sessions under
+# WRAP_TMP and the cached real viewer; sets OUT, ERR, RC. "-" means no
+# test script (only for calls that never open a window).
+wrap() {
+  local script="$1"
+  shift
+  [[ "$script" == - ]] && script="" || script="$FIXTURES/$script"
+  run_capture env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="${VIEWER_CACHE:-$WRAP_TMP/cache}" \
+    HTML_POPUP_SWIFTC="${WRAP_SWIFTC:-}" HTML_POPUP_TEST_SCRIPT="$script" \
+    "$WRAPPER" "$@"
+}
+
+# run_bounded <seconds> <command...> : run command with a watchdog; sets RC
+# (124 when the watchdog had to kill it).
+run_bounded() {
+  local secs="$1" pid watchdog
+  shift
+  "$@" >/dev/null 2>&1 &
+  pid=$!
+  (sleep "$secs" && kill -9 "$pid" 2>/dev/null) >/dev/null 2>&1 &
+  watchdog=$!
+  set +e
+  wait "$pid"
+  RC=$?
+  set -e
+  if ! kill -0 "$watchdog" 2>/dev/null; then
+    RC=124
+  fi
+  pkill -P "$watchdog" 2>/dev/null || true
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+}
+
+# fake_session <var> <pid> [events...] : make a session dir without a viewer
+# and store its path in <var>.
+fake_session() {
+  local var="$1" pid="$2" dir line
+  shift 2
+  dir="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
+  printf '%s\n' "$pid" >"$dir/pid"
+  mkfifo "$dir/in"
+  : >"$dir/events.jsonl"
+  for line in "$@"; do
+    printf '%s\n' "$line" >>"$dir/events.jsonl"
+  done
+  printf -v "$var" '%s' "$dir"
+}
+
+# dead_pid : print the pid of a process that has already exited.
+dead_pid() {
+  local pid
+  sleep 0 &
+  pid=$!
+  wait "$pid" || true
+  printf '%s' "$pid"
+}
+
+# live_pid : print the pid of a tracked idle process that stays alive.
+live_pid() {
+  sleep 120 >/dev/null 2>&1 &
+  track_pid "$!"
+  LIVE_PID=$!
+}
+
+# session_pid_of <dir> : the viewer pid recorded in a session dir.
+session_pid_of() {
+  tr -d '[:space:]' <"$1/pid"
+}
+
+# --- Tests: wrapper arguments and sessions without a viewer --------------------
+
+test_wrapper_args() {
+  new_tmpdir WRAP_TMP
+  local session stale fresh alive dead
+
+  wrap - show "$WRAP_TMP/no-such-page.html"
+  assert_eq "show with a missing page exits 3" "3" "$RC"
+  assert "missing page is named" contains "no-such-page.html" "$ERR"
+
+  wrap - ask "$FIXTURES/basic.html" --data "$FIXTURES/bad-data.json"
+  assert_eq "ask with invalid data exits 3" "3" "$RC"
+  assert "invalid data is explained" contains "not valid JSON" "$ERR"
+
+  wrap - live start "$FIXTURES/basic.html" --data "$WRAP_TMP/no-such.json"
+  assert_eq "live start with missing data exits 3" "3" "$RC"
+  assert "no session dir is created before validation" \
+    test -z "$(find "$WRAP_TMP" -maxdepth 1 -name 'html-popup.*')"
+
+  wrap - show
+  assert_eq "show without a page exits 2" "2" "$RC"
+  wrap - show "$FIXTURES/basic.html" --frobnicate
+  assert_eq "show with an unknown option exits 2" "2" "$RC"
+  wrap - show "$FIXTURES/basic.html" --wait 5
+  assert_eq "show rejects --wait" "2" "$RC"
+  wrap - ask "$FIXTURES/basic.html" --wait soon
+  assert_eq "ask with a bad --wait exits 2" "2" "$RC"
+  wrap - ask --resume "$WRAP_TMP/nowhere"
+  assert_eq "ask --resume of a non-session exits 2" "2" "$RC"
+  wrap - live frobnicate
+  assert_eq "unknown live command exits 2" "2" "$RC"
+
+  # Stale cleanup runs before validation, so a failing call still prunes.
+  dead="$(dead_pid)"
+  live_pid
+  alive="$LIVE_PID"
+  fake_session stale "$dead"
+  fake_session fresh "$dead"
+  fake_session session "$alive"
+  touch -t 202001010000 "$stale" "$session"
+  wrap - show "$WRAP_TMP/no-such-page.html"
+  assert "old session with a dead viewer is removed" test ! -e "$stale"
+  assert "recent session is kept" test -d "$fresh"
+  assert "old session with a live viewer is kept" test -d "$session"
+}
+
+test_wrapper_fake_sessions() {
+  new_tmpdir WRAP_TMP
+  local session dead
+  dead="$(dead_pid)"
+  live_pid
+
+  fake_session session "$LIVE_PID" '{"seq":1,"type":"ready"}'
+  wrap - live send "$session" '{"broken":'
+  assert_eq "send of invalid JSON exits 2" "2" "$RC"
+  wrap - live send "$session" '1 2'
+  assert_eq "send of two values exits 2" "2" "$RC"
+  wrap - live send "$session"
+  assert_eq "send without JSON exits 2" "2" "$RC"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait prints the new event" '{"seq":1,"type":"ready"}' "$OUT"
+  assert_eq "wait with new events exits 0" "0" "$RC"
+  assert_eq "wait stores the cursor" "1" "$(tr -d '[:space:]' <"$session/cursor")"
+  wrap - live wait "$session" --wait 1
+  assert_eq "wait with nothing new exits 4" "4" "$RC"
+  assert "wait with nothing new prints nothing" test -z "$OUT"
+
+  # A torn last line is left for the next call.
+  printf '{"seq":2,"type":"message","data":"a"}\n{"seq":3,"ty' \
+    >>"$session/events.jsonl"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait skips an incomplete line" \
+    '{"seq":2,"type":"message","data":"a"}' "$OUT"
+  printf 'pe":"closed","reason":"user"}\n' >>"$session/events.jsonl"
+  wrap - live wait "$session" --wait 0
+  assert_eq "wait with closed in the batch exits 1" "1" "$RC"
+  assert_eq "wait prints the completed line" \
+    '{"seq":3,"type":"closed","reason":"user"}' "$OUT"
+  run_bounded 3 env TMPDIR="$WRAP_TMP" "$WRAPPER" live wait "$session"
+  assert_eq "wait after closed exits 1 at once" "1" "$RC"
+  wrap - live send "$session" '{"late":true}'
+  assert_eq "send after closed exits 1" "1" "$RC"
+  wrap - live close "$session"
+  assert_eq "close of a closed session exits 0" "0" "$RC"
+
+  fake_session session "$dead" '{"seq":1,"type":"ready"}'
+  wrap - live wait "$session" --wait 0
+  assert_eq "first wait still gets the ready event" "0" "$RC"
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait on a crashed viewer exits 5" "5" "$RC"
+  assert "crash is reported" contains "without a closed event" "$ERR"
+  wrap - live send "$session" '1'
+  assert_eq "send to a dead viewer exits 1" "1" "$RC"
+  wrap - live close "$session"
+  assert_eq "close of a dead session exits 0" "0" "$RC"
+  wrap - ask --resume "$session" --wait 5
+  assert_eq "ask --resume on a crashed viewer exits 5" "5" "$RC"
+}
+
+# --- Tests: wrapper with the real viewer ---------------------------------------
+
+test_wrapper_show() {
+  skip_unless_gui "wrapper show and live start" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local start session cmd
+
+  for cmd in show "live start"; do
+    start=$SECONDS
+    # shellcheck disable=SC2086 # split "live start" into two words
+    wrap noop.js $cmd "$FIXTURES/basic.html" --timeout 30
+    assert_eq "$cmd exits 0" "0" "$RC"
+    assert "$cmd returns within 3 s" test $((SECONDS - start)) -le 3
+    session="$OUT"
+    assert "$cmd prints a session dir" test -f "$session/events.jsonl"
+    assert_eq "$cmd session is under TMPDIR" "$WRAP_TMP" "$(dirname "$session")"
+    assert "$cmd leaves the viewer running" \
+      kill -0 "$(session_pid_of "$session")"
+    assert "$cmd waited for ready" \
+      contains '"type":"ready"' "$(cat "$session/events.jsonl")"
+    wrap - live close "$session"
+    assert_eq "$cmd window closes" "0" "$RC"
+    assert_eq "$cmd close reason is agent" "agent" \
+      "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
+  done
+}
+
+test_wrapper_ask() {
+  skip_unless_gui "wrapper ask" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local session
+
+  wrap answer.js ask "$FIXTURES/bridge.html" --timeout 20
+  assert_eq "ask exits 0 on answer" "0" "$RC"
+  assert_eq "ask prints the answer JSON" '{"month":7}' "$OUT"
+
+  wrap send.js ask "$FIXTURES/bridge.html" --timeout 20
+  assert_eq "ask exits 1 when the page cancels" "1" "$RC"
+  assert "ask prints no answer on cancel" test -z "$OUT"
+
+  wrap noop.js ask "$FIXTURES/bridge.html" --timeout 2
+  assert_eq "ask exits 4 when the window times out" "4" "$RC"
+
+  wrap answer-later.js ask "$FIXTURES/bridge.html" --timeout 30 --wait 1
+  assert_eq "ask --wait 1 expires with exit 4" "4" "$RC"
+  assert "expired ask prints a resume hint" \
+    contains "still waiting; resume with: html-popup.sh ask --resume" "$ERR"
+  session="${ERR##*--resume }"
+  assert "resume hint names a session" test -f "$session/pid"
+  assert "window stays open after the wait expires" \
+    kill -0 "$(session_pid_of "$session")"
+  wrap - ask --resume "$session" --wait 10
+  assert_eq "ask --resume exits 0" "0" "$RC"
+  assert_eq "ask --resume prints the answer" '{"month":3}' "$OUT"
+}
+
+test_wrapper_live() {
+  skip_unless_gui "wrapper live round trip" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local session events="" tries=10
+
+  wrap noop.js live start "$FIXTURES/echo.html" --timeout 30
+  assert_eq "live start exits 0" "0" "$RC"
+  session="$OUT"
+  wrap - live send "$session" '{"details": {"total": 43929}}'
+  assert_eq "live send exits 0" "0" "$RC"
+  while ((tries-- > 0)) && not_contains '"type":"message"' "$events"; do
+    wrap - live wait "$session" --wait 5
+    assert_eq "live wait exits 0 while open" "0" "$RC"
+    events+="$OUT"$'\n'
+  done
+  assert "wait sees ready" contains '{"seq":1,"type":"ready"}' "$events"
+  assert "wait sees the echo" \
+    contains '{"seq":2,"type":"message","data":{"details":{"total":43929}}}' \
+    "$events"
+
+  wrap - live close "$session"
+  assert_eq "live close exits 0" "0" "$RC"
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait after close exits 1" "1" "$RC"
+  assert_eq "wait prints the closed event" \
+    '{"seq":3,"type":"closed","reason":"agent"}' "$OUT"
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait after consumed closed exits 1" "1" "$RC"
+  assert "it prints nothing new" test -z "$OUT"
+  wrap - live close "$session"
+  assert_eq "second close exits 0" "0" "$RC"
+}
+
+test_wrapper_live_races() {
+  skip_unless_gui "wrapper live races and crashes" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local session pid i closer
+
+  wrap noop.js live start "$FIXTURES/echo.html" --timeout 30
+  session="$OUT"
+  env TMPDIR="$WRAP_TMP" "$WRAPPER" live close "$session" >/dev/null 2>&1 &
+  closer=$!
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    run_bounded 5 env TMPDIR="$WRAP_TMP" \
+      "$WRAPPER" live send "$session" "{\"n\":$i}"
+    assert "send $i racing close does not hang" test "$RC" -ne 124
+    assert "send $i racing close exits 0 or 1" test "$RC" -le 1
+  done
+  wait "$closer" || true
+  run_bounded 5 env TMPDIR="$WRAP_TMP" "$WRAPPER" live send "$session" '1'
+  assert_eq "send after close exits 1 without hanging" "1" "$RC"
+
+  wrap noop.js live start "$FIXTURES/echo.html" --timeout 30
+  session="$OUT"
+  pid="$(session_pid_of "$session")"
+  kill -9 "$pid"
+  while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait first drains ready" "0" "$RC"
+  wrap - live wait "$session" --wait 5
+  assert_eq "wait on a killed viewer exits 5" "5" "$RC"
+  wrap - live close "$session"
+  assert_eq "close on a gone session exits 0" "0" "$RC"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -688,6 +995,12 @@ main() {
   test_bridge_bad_data
   test_inbound_echo
   test_inbound_invalid
+  test_wrapper_args
+  test_wrapper_fake_sessions
+  test_wrapper_show
+  test_wrapper_ask
+  test_wrapper_live
+  test_wrapper_live_races
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }
