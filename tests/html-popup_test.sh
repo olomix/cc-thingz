@@ -972,6 +972,42 @@ test_wrapper_live_races() {
   assert_eq "close on a gone session exits 0" "0" "$RC"
 }
 
+# A Bash tool timeout kills the caller's whole process group; the window
+# must survive that and stay reachable through its session dir.
+test_wrapper_caller_killed() {
+  skip_unless_gui "window outlives a killed wrapper" || return 0
+  ensure_viewer
+  new_tmpdir WRAP_TMP
+  local caller session pid tries=100
+
+  # Job control puts the background wrapper in its own process group.
+  set -m
+  env TMPDIR="$WRAP_TMP" CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
+    HTML_POPUP_TEST_SCRIPT="$FIXTURES/noop.js" \
+    "$WRAPPER" ask "$FIXTURES/bridge.html" --timeout 30 >/dev/null 2>&1 &
+  caller=$!
+  set +m
+  track_pid "$caller"
+  until session="$(find "$WRAP_TMP" -maxdepth 1 -name 'html-popup.*' | head -n 1)" &&
+    [[ -n "$session" ]] && grep -q '"ready"' "$session/events.jsonl" 2>/dev/null; do
+    ((tries-- > 0)) || break
+    sleep 0.1
+  done
+  assert "ask opened a window" test -s "$session/pid"
+  pid="$(session_pid_of "$session")"
+
+  kill -KILL -- -"$caller"
+  wait "$caller" 2>/dev/null || true
+  assert "viewer survives its killed process group" kill -0 "$pid"
+  assert "viewer leads its own process group" \
+    test "$(ps -o pgid= -p "$pid" | tr -d ' ')" != "$caller"
+  wrap - ask --resume "$session" --wait 1
+  assert_eq "killed ask can be resumed" "4" "$RC"
+  wrap - live close "$session"
+  assert_eq "surviving window closes" "agent" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
+}
+
 # --- Tests: starter template -------------------------------------------------
 
 TEMPLATE="$PLUGIN_DIR/assets/template.html"
@@ -1136,6 +1172,7 @@ main() {
   test_wrapper_ask
   test_wrapper_live
   test_wrapper_live_races
+  test_wrapper_caller_killed
   test_template_static
   test_template_headless
   test_solar_static

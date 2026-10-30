@@ -480,16 +480,22 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - [x] run tests — must pass before task 10
 
 ### Task 10: Verify acceptance criteria
-- [ ] verify show, ask (with resume) and live modes work as in Overview
-- [ ] verify the window is native (titled, transparent title bar,
+- [x] verify show, ask (with resume) and live modes work as in Overview
+- [x] verify the window is native (titled, transparent title bar,
       draggable, Edit shortcuts in inputs, Esc/Cmd-W/close) and never dims
-      other windows
-- [ ] verify a killed or timed-out wrapper call leaves the window open
-- [ ] verify no personal data in any new file (paths, emails, hostnames)
-- [ ] run full test suite: `for t in tests/*_test.sh; do "$t" || exit 1; done`
-- [ ] run `shellcheck plugins/html-popup/scripts/*.sh
+      other windows (one layer-0 window, no backdrop, accessory process, Esc
+      covered by tests; drag, Edit shortcuts and Cmd-W skipped - screen was
+      locked and not automatable, see Post-Completion)
+- [x] verify a killed or timed-out wrapper call leaves the window open
+      (➕ regression test `test_wrapper_caller_killed`)
+- [x] verify no personal data in any new file (paths, emails, hostnames)
+- [x] run full test suite: `for t in tests/*_test.sh; do "$t" || exit 1; done`
+- [x] run `shellcheck plugins/html-popup/scripts/*.sh
       plugins/html-popup/examples/*/*.sh tests/html-popup_test.sh
       tests/fixtures/fake-swiftc.sh`
+- ⚠️ with the screen locked, pages report `visibilityState=hidden` and rAF
+  stalls (both alpha-0 test windows and real ones); timers still run, so the
+  tests pass. Recheck on an unlocked desktop.
 
 ### Task 11: [Final] Update documentation
 - [ ] add an `html-popup` section to `README.md` (purpose, requirements,
