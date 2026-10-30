@@ -344,6 +344,8 @@ test_real_build() {
 FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
 VIEWER_BIN=""
 VIEWER_CACHE=""
+SESSION=""
+EVENTS=""
 
 # ensure_viewer : compile the real viewer once per run into VIEWER_BIN.
 ensure_viewer() {
@@ -451,6 +453,96 @@ test_viewer_errors() {
   assert "usage errors write no events" test ! -e "$session/events.jsonl"
 }
 
+# --- Tests: JS bridge (page -> agent) ------------------------------------------
+
+# run_bridge <test script> [viewer args...] : run bridge.html in a fresh
+# session with the given test script; sets SESSION, EVENTS, RC.
+run_bridge() {
+  local script="$1"
+  shift
+  new_tmpdir SESSION
+  EVENTS="$SESSION/events.jsonl"
+  run_viewer "$FIXTURES/bridge.html" --session "$SESSION" --timeout 10 \
+    --test-script "$FIXTURES/$script" "$@"
+}
+
+test_bridge_send() {
+  skip_unless_gui "bridge send" || return 0
+  ensure_viewer
+  run_bridge send.js
+  assert_eq "send then cancel exits 0" "0" "$RC"
+  assert_eq "send writes ready, three messages and closed" "5" \
+    "$(count_lines "$EVENTS")"
+  assert_eq "object message round-trips" \
+    '{"seq":2,"type":"message","data":{"action":"select","month":7,"nested":{"list":[1,"two"]}}}' \
+    "$(sed -n 2p "$EVENTS")"
+  assert_eq "string message round-trips" \
+    '{"seq":3,"type":"message","data":"plain text"}' "$(sed -n 3p "$EVENTS")"
+  assert_eq "float message keeps every digit" \
+    '{"seq":4,"type":"message","data":0.30000000000000004}' \
+    "$(sed -n 4p "$EVENTS")"
+  assert_eq "cancel closes with reason cancel" \
+    '{"seq":5,"type":"closed","reason":"cancel"}' "$(sed -n 5p "$EVENTS")"
+}
+
+test_bridge_answer() {
+  skip_unless_gui "bridge answer" || return 0
+  ensure_viewer
+  run_bridge answer.js
+  assert_eq "answer exits 0" "0" "$RC"
+  assert_eq "answer writes three events" "3" "$(count_lines "$EVENTS")"
+  assert_eq "answer event carries the value" \
+    '{"seq":2,"type":"answer","data":{"month":7}}' "$(sed -n 2p "$EVENTS")"
+  assert_eq "answer closes with reason answer" \
+    '{"seq":3,"type":"closed","reason":"answer"}' "$(sed -n 3p "$EVENTS")"
+}
+
+test_bridge_data() {
+  skip_unless_gui "bridge data" || return 0
+  ensure_viewer
+  run_bridge data.js --data "$FIXTURES/data.json"
+  assert_eq "data echo exits 0" "0" "$RC"
+  assert_eq "htmlPopup.data round-trips --data" \
+    "$(jq -cS . "$FIXTURES/data.json")" \
+    "$(event_field "$EVENTS" 2 '.data' | jq -cS .)"
+
+  run_bridge data.js
+  assert_eq "htmlPopup.data is null without --data" "null" \
+    "$(event_field "$EVENTS" 2 '.data')"
+}
+
+test_bridge_escape() {
+  skip_unless_gui "bridge escape" || return 0
+  ensure_viewer
+  run_bridge escape-input.js
+  assert_eq "Esc in an input keeps the window open" "still open" \
+    "$(event_field "$EVENTS" 2 .data)"
+  assert_eq "window closes later by cancel" "cancel" \
+    "$(event_field "$EVENTS" 3 .reason)"
+
+  run_bridge escape.js
+  assert_eq "Esc outside inputs exits 0" "0" "$RC"
+  assert_eq "Esc outside inputs closes with reason user" \
+    '{"seq":2,"type":"closed","reason":"user"}' "$(sed -n 2p "$EVENTS")"
+}
+
+test_bridge_bad_data() {
+  skip_unless_gui "bridge invalid data" || return 0
+  ensure_viewer
+  run_bridge noop.js --data "$FIXTURES/bad-data.json"
+  assert_eq "invalid --data exits 3" "3" "$RC"
+  assert_eq "invalid --data writes only closed" "1" "$(count_lines "$EVENTS")"
+  assert_eq "invalid --data reason is error" "error" \
+    "$(event_field "$EVENTS" 1 .reason)"
+  assert "invalid --data is explained" \
+    contains "not valid JSON" "$(event_field "$EVENTS" 1 .message)"
+
+  run_bridge noop.js --data "$SESSION/no-such-data.json"
+  assert_eq "missing --data exits 3" "3" "$RC"
+  assert "missing --data is explained" \
+    contains "no-such-data.json" "$(event_field "$EVENTS" 1 .message)"
+}
+
 # --- Runner --------------------------------------------------------------------
 
 main() {
@@ -467,6 +559,11 @@ main() {
   test_real_build
   test_viewer_startup
   test_viewer_errors
+  test_bridge_send
+  test_bridge_answer
+  test_bridge_data
+  test_bridge_escape
+  test_bridge_bad_data
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }

@@ -7,6 +7,8 @@
 // use. Session files in DIR: `pid`, `in` (FIFO), `events.jsonl` (one JSON
 // event per line), `viewer.log`.
 //
+// The page talks back through `window.htmlPopup` (see `bridgeSource`).
+//
 // Exit codes: 0 normal close, 2 usage error, 3 page or data invalid,
 // 4 --timeout reached. Every close path except a usage error appends one
 // `closed` event with a `reason` before exiting.
@@ -187,6 +189,62 @@ func startSession(_ dir: String) throws -> EventLog {
     return try EventLog(path: dir + "/events.jsonl")
 }
 
+// Read and validate --data. Returns the JSON text, kept as-is so numbers
+// reach the page exactly as written.
+func loadData(_ path: String) throws -> String {
+    guard let bytes = FileManager.default.contents(atPath: path) else {
+        throw UsageError.message("data file not found or not readable: \(path)")
+    }
+    do {
+        _ = try JSONSerialization.jsonObject(with: bytes, options: .fragmentsAllowed)
+    } catch {
+        throw UsageError.message("data file is not valid JSON: \(path)")
+    }
+    return String(decoding: bytes, as: UTF8.self)
+}
+
+let messageHandlerName = "htmlPopup"
+
+// Injected at document start. Values cross the bridge as JSON.stringify
+// strings in both directions, so numbers and top-level scalars survive.
+func bridgeSource(dataJSON: String?) -> String {
+    let data = dataJSON.map { "JSON.parse(\(jsonString($0)))" } ?? "null"
+    return """
+        (() => {
+          const post = (type, value) => window.webkit.messageHandlers
+            .\(messageHandlerName).postMessage({
+              type,
+              value: value === undefined ? "null" : JSON.stringify(value),
+            });
+          const handlers = [];
+          const popup = {
+            data: \(data),
+            closeOnEscape: true,
+            answer: (value) => post("answer", value),
+            cancel: () => post("cancel"),
+            send: (value) => post("send", value),
+            onMessage: (fn) => { handlers.push(fn); },
+            // Called by the viewer with one JSON text per inbound message.
+            _receive: (text) => {
+              const value = JSON.parse(text);
+              for (const fn of handlers) {
+                try { fn(value); } catch (e) { console.error(e); }
+              }
+            },
+          };
+          Object.defineProperty(window, "htmlPopup", { value: popup });
+
+          const editable = (el) => !!el && (el.isContentEditable ||
+            ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+          document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape" || event.defaultPrevented) return;
+            if (!popup.closeOnEscape || editable(document.activeElement)) return;
+            post("escape");
+          });
+        })();
+        """
+}
+
 // The page fills the window up to its top edge, so the web view would
 // swallow drags in the title bar area. This strip gives them back.
 final class TitleBarDragView: NSView {
@@ -196,19 +254,21 @@ final class TitleBarDragView: NSView {
 }
 
 final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
-    WKNavigationDelegate, WKUIDelegate
+    WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler
 {
     private let options: Options
     private let pageURL: URL
+    private let dataJSON: String?
     private let events: EventLog
     private var window: NSWindow?
     private var isReady = false
 
     private var testMode: Bool { options.testScript != nil }
 
-    init(options: Options, pageURL: URL, events: EventLog) {
+    init(options: Options, pageURL: URL, dataJSON: String?, events: EventLog) {
         self.options = options
         self.pageURL = pageURL
+        self.dataJSON = dataJSON
         self.events = events
     }
 
@@ -227,7 +287,13 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         window.isReleasedWhenClosed = false
         window.delegate = self
 
-        let web = WKWebView(frame: frame, configuration: WKWebViewConfiguration())
+        let configuration = WKWebViewConfiguration()
+        let content = configuration.userContentController
+        content.add(self, name: messageHandlerName)
+        content.addUserScript(WKUserScript(
+            source: bridgeSource(dataJSON: dataJSON),
+            injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let web = WKWebView(frame: frame, configuration: configuration)
         web.autoresizingMask = [.width, .height]
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -373,6 +439,48 @@ final class Viewer: NSObject, NSApplicationDelegate, NSWindowDelegate,
         return nil
     }
 
+    func userContentController(_ controller: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+            let type = body["type"] as? String
+        else {
+            log("dropped malformed bridge message: \(message.body)")
+            return
+        }
+        switch type {
+        case "send", "answer":
+            guard let value = eventData(body["value"]) else {
+                log("dropped \(type) with a value that is not JSON")
+                return
+            }
+            if type == "send" {
+                events.append("message", data: value)
+            } else {
+                events.append("answer", data: value)
+                events.close(.answer)
+            }
+        case "cancel":
+            events.close(.cancel)
+        case "escape":
+            events.close(.user)
+        default:
+            log("dropped unknown bridge message type: \(type)")
+        }
+    }
+
+    // The bridge sends JSON.stringify output; pages can also post directly,
+    // so check it is JSON and fits on one event line.
+    private func eventData(_ value: Any?) -> String? {
+        guard let text = value as? String,
+            let object = try? JSONSerialization.jsonObject(
+                with: Data(text.utf8), options: .fragmentsAllowed)
+        else { return nil }
+        if !text.contains(where: \.isNewline) { return text }
+        let compact = try? JSONSerialization.data(
+            withJSONObject: object, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+        return compact.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
     private func runTestScript(in webView: WKWebView) {
         guard let path = options.testScript else { return }
         guard let source = try? String(contentsOfFile: path, encoding: .utf8) else {
@@ -409,10 +517,19 @@ if !FileManager.default.isReadableFile(atPath: pageURL.path) {
     events.close(.error, message: "page not found or not readable: \(options.page)")
 }
 
+var dataJSON: String?
+if let dataPath = options.data {
+    do {
+        dataJSON = try loadData(dataPath)
+    } catch UsageError.message(let text) {
+        events.close(.error, message: text)
+    }
+}
+
 let app = NSApplication.shared
 // No app bundle: run as an accessory so the window can show and take focus
 // without a Dock icon.
 app.setActivationPolicy(.accessory)
-let viewer = Viewer(options: options, pageURL: pageURL, events: events)
+let viewer = Viewer(options: options, pageURL: pageURL, dataJSON: dataJSON, events: events)
 app.delegate = viewer
 app.run()

@@ -354,20 +354,20 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 - Create: `tests/fixtures/html-popup/*.js` (test scripts)
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] inject the bridge at document start: `data`, `answer`, `cancel`,
+- [x] inject the bridge at document start: `data`, `answer`, `cancel`,
       `send`, `onMessage`, `closeOnEscape`; values posted as
       `JSON.stringify` strings and written to events as-is
-- [ ] validate `--data` as JSON before load (invalid → `closed`/`error`,
+- [x] validate `--data` as JSON before load (invalid → `closed`/`error`,
       exit 3); expose it as `htmlPopup.data`
-- [ ] implement `answer` (event, then `closed`/`answer`), `cancel`
+- [x] implement `answer` (event, then `closed`/`answer`), `cancel`
       (`closed`/`cancel`), `send` (`message` event, window stays open), Esc
       handling in the bridge (skip when an editable element has focus)
-- [ ] write tests: `send` of an object, a string and a float round-trips
+- [x] write tests: `send` of an object, a string and a float round-trips
       exactly; `answer` gives `answer` then `closed`; `data` round-trips
       `--data`
-- [ ] write tests for edge cases: `cancel` → `closed`/`cancel`; Esc
+- [x] write tests for edge cases: `cancel` → `closed`/`cancel`; Esc
       simulated in an input does not close; invalid `--data` → exit 3
-- [ ] run tests — must pass before task 5
+- [x] run tests — must pass before task 5
 
 ### Task 5: Viewer — inbound FIFO (agent → page)
 
