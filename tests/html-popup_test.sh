@@ -332,15 +332,123 @@ test_compiler_failure() {
 # Compiles the real viewer source, so it needs Xcode tools.
 test_real_build() {
   skip_unless_gui "real viewer build" || return 0
-  local cache bin rc=0
-  new_tmpdir cache
-  run_capture env CLAUDE_PLUGIN_DATA="$cache" \
-    "$PLUGIN_DIR/scripts/html-popup.sh" build
-  assert_eq "real build exits 0" "0" "$RC"
-  bin="$OUT"
-  assert "real build produces an executable" test -x "$bin"
-  "$bin" >/dev/null 2>&1 || rc=$?
+  local rc=0
+  ensure_viewer
+  assert "real build produces an executable" test -x "$VIEWER_BIN"
+  "$VIEWER_BIN" >/dev/null 2>&1 || rc=$?
   assert_eq "viewer without arguments exits 2" "2" "$rc"
+}
+
+# --- Helpers: running the real viewer ------------------------------------------
+
+FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
+VIEWER_BIN=""
+VIEWER_CACHE=""
+
+# ensure_viewer : compile the real viewer once per run into VIEWER_BIN.
+ensure_viewer() {
+  [[ -n "$VIEWER_BIN" ]] && return 0
+  new_tmpdir VIEWER_CACHE
+  run_capture env CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
+    "$PLUGIN_DIR/scripts/html-popup.sh" build
+  assert_eq "viewer builds for viewer tests" "0" "$RC"
+  VIEWER_BIN="$OUT"
+}
+
+# run_viewer <args...> : run the viewer in the background (tracked for
+# cleanup), wait for it and store its exit code in RC and pid in VIEWER_PID.
+# Callers always pass --timeout, so the wait is bounded.
+run_viewer() {
+  "$VIEWER_BIN" "$@" >/dev/null 2>&1 &
+  VIEWER_PID=$!
+  track_pid "$VIEWER_PID"
+  set +e
+  wait "$VIEWER_PID"
+  RC=$?
+  set -e
+}
+
+# event_field <events file> <line number> <jq filter>
+event_field() {
+  sed -n "${2}p" "$1" | jq -r "$3"
+}
+
+# --- Tests: viewer window and session files ------------------------------------
+
+test_viewer_startup() {
+  skip_unless_gui "viewer startup and timeout" || return 0
+  ensure_viewer
+  local session events
+  new_tmpdir session
+  events="$session/events.jsonl"
+
+  run_viewer "$FIXTURES/basic.html" --session "$session" --timeout 2 \
+    --test-script "$FIXTURES/noop.js"
+  assert_eq "--timeout exits 4" "4" "$RC"
+  assert_eq "ready is the first event" "ready" "$(event_field "$events" 1 .type)"
+  assert_eq "ready has seq 1" "1" "$(event_field "$events" 1 .seq)"
+  assert_eq "timeout writes closed" "closed" "$(event_field "$events" 2 .type)"
+  assert_eq "closed reason is timeout" "timeout" \
+    "$(event_field "$events" 2 .reason)"
+  assert_eq "closed has seq 2" "2" "$(event_field "$events" 2 .seq)"
+  assert_eq "exactly two events" "2" "$(count_lines "$events")"
+  assert_eq "pid file holds the viewer pid" "$VIEWER_PID" \
+    "$(tr -d '[:space:]' <"$session/pid")"
+  assert "inbound FIFO exists" test -p "$session/in"
+  assert "viewer.log exists" test -f "$session/viewer.log"
+}
+
+test_viewer_errors() {
+  skip_unless_gui "viewer errors" || return 0
+  ensure_viewer
+  local session events
+  new_tmpdir session
+  events="$session/events.jsonl"
+
+  run_viewer "$session/no-such-page.html" --session "$session" --timeout 5 \
+    --test-script "$FIXTURES/noop.js"
+  assert_eq "missing page exits 3" "3" "$RC"
+  assert_eq "missing page writes one event" "1" "$(count_lines "$events")"
+  assert_eq "missing page writes closed" "closed" \
+    "$(event_field "$events" 1 .type)"
+  assert_eq "missing page reason is error" "error" \
+    "$(event_field "$events" 1 .reason)"
+  assert "missing page names the page" \
+    contains "no-such-page.html" "$(event_field "$events" 1 .message)"
+
+  # A directory passes the readable check but WebKit fails to load it.
+  new_tmpdir session
+  events="$session/events.jsonl"
+  run_viewer "$FIXTURES" --session "$session" --timeout 5 \
+    --test-script "$FIXTURES/noop.js"
+  assert_eq "load failure exits 3" "3" "$RC"
+  assert_eq "load failure reason is error" "error" \
+    "$(event_field "$events" 1 .reason)"
+  assert "load failure is logged" \
+    contains "failed to load" "$(cat "$session/viewer.log")"
+
+  new_tmpdir session
+  run_capture "$VIEWER_BIN" "$FIXTURES/basic.html"
+  assert_eq "missing --session exits 2" "2" "$RC"
+  assert "missing --session is named" contains "missing --session" "$ERR"
+
+  run_capture "$VIEWER_BIN" "$FIXTURES/basic.html" --session "$session" \
+    --size 10
+  assert_eq "bad --size exits 2" "2" "$RC"
+  assert "bad --size is named" contains "bad --size" "$ERR"
+
+  run_capture "$VIEWER_BIN" "$FIXTURES/basic.html" --session "$session" \
+    --timeout soon
+  assert_eq "bad --timeout exits 2" "2" "$RC"
+
+  run_capture "$VIEWER_BIN" "$FIXTURES/basic.html" --session "$session" \
+    --frobnicate
+  assert_eq "unknown option exits 2" "2" "$RC"
+  assert "unknown option is named" contains "unknown option" "$ERR"
+
+  run_capture "$VIEWER_BIN" a.html b.html --session "$session"
+  assert_eq "two pages exit 2" "2" "$RC"
+  assert "usage errors write no events" test ! -e "$session/events.jsonl"
 }
 
 # --- Runner --------------------------------------------------------------------
@@ -357,6 +465,8 @@ main() {
   test_unwritable_cache
   test_compiler_failure
   test_real_build
+  test_viewer_startup
+  test_viewer_errors
 
   printf '\nAll %d assertions passed (%d skipped).\n' "$PASS_COUNT" "$SKIP_COUNT"
 }

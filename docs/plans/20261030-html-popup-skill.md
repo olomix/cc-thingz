@@ -323,28 +323,29 @@ Units: GWh (= thousand MWh). Columns: utility-scale PV, small-scale PV
 **Files:**
 - Modify: `plugins/html-popup/viewer/html-popup-viewer.swift`
 - Create: `tests/fixtures/html-popup/basic.html`
+- Create: `tests/fixtures/html-popup/noop.js` (empty test script: test mode, no actions)
 - Modify: `tests/html-popup_test.sh`
 
-- [ ] parse `PAGE --session DIR [--data] [--title] [--size] [--timeout]
+- [x] parse `PAGE --session DIR [--data] [--title] [--size] [--timeout]
       [--test-script]`; exit 2 on usage errors
-- [ ] on start: `setsid()`, `mkfifo DIR/in`, write `DIR/pid`; event writer
+- [x] on start: `setsid()`, `mkfifo DIR/in`, write `DIR/pid`; event writer
       with increasing `seq`, one `write` per line
-- [ ] native window per the prototype spec: titled + full-size content,
+- [x] native window per the prototype spec: titled + full-size content,
       transparent title bar, drag view, title from page or `--title`,
       `.accessory` activation + activate, main menu with Edit and Window →
       Close; test mode orders front at alpha 0 without activating
-- [ ] page load via `loadFileURL` with read access to the page dir; `ready`
+- [x] page load via `loadFileURL` with read access to the page dir; `ready`
       after load; load failure → `closed` `reason: error`, exit 3;
       `--timeout` → `closed` `reason: timeout`, exit 4; close button/Cmd-W →
       `closed` `reason: user`, exit 0
-- [ ] open `http(s)` link navigations in the default browser and cancel them
+- [x] open `http(s)` link navigations in the default browser and cancel them
       in the popup
-- [ ] write tests (headless, viewer started directly with a temp session
+- [x] write tests (headless, viewer started directly with a temp session
       dir): `ready` is the first event; `pid` and `in` exist; `--timeout 2`
       → `closed`/`timeout` and exit 4
-- [ ] write tests for errors: missing page → exit 3 with `closed`/`error`;
+- [x] write tests for errors: missing page → exit 3 with `closed`/`error`;
       bad args → exit 2
-- [ ] run tests — must pass before task 4
+- [x] run tests — must pass before task 4
 
 ### Task 4: Viewer — JS bridge (page → agent)
 
