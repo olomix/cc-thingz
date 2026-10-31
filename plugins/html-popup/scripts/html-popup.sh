@@ -22,6 +22,8 @@
 #   HTML_POPUP_TEST_SCRIPT  JS file run after page load; headless test mode
 #   HTML_POPUP_READY_WAIT   seconds a page has to get ready (default 10;
 #                           tests shorten it)
+#   HTML_POPUP_LOCK_WAIT    seconds a build waits for the install lock
+#                           (default 10; tests shorten it)
 set -euo pipefail
 
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,10 +44,9 @@ CLOSE_WAIT=5
 POLL=0.2
 # Short: a blocked FIFO write takes milliseconds.
 FIFO_POLL=0.05
-# The install lock: poll interval, tries, and the age (s) of a dead lock.
+# The install lock: poll interval and tries before giving up.
 LOCK_POLL=0.1
-LOCK_TRIES=100
-LOCK_STALE=5
+LOCK_TRIES=$((${HTML_POPUP_LOCK_WAIT:-10} * 10))
 OPEN="${HTML_POPUP_OPEN:-open}"
 
 # xcrun picks the Xcode toolchain with the AppKit/WebKit SDK, not whatever
@@ -145,13 +146,20 @@ viewer_path() {
 }
 
 bundle_ok() {
-  [[ -x "$1/$VIEWER_EXE" && -f "$1/Contents/Info.plist" ]]
+  [[ -x "$1/$VIEWER_EXE" && -f "$1/Contents/Info.plist" &&
+    -f "$1/Contents/Resources/AppIcon.icns" ]]
+}
+
+# fail_build <tmp> <message> : drop a half-built bundle, then exit 2.
+fail_build() {
+  rm -rf "$1"
+  die "$2"
 }
 
 # build_viewer : build the viewer app bundle unless cached; print its path.
 build_viewer() {
   (($# == 0)) || die "unexpected argument: $1"
-  local failed=0 bundle tmp lock damaged age i
+  local failed=0 bundle tmp damaged me i
   missing_macos && failed=1
   missing_compiler && failed=1
   missing_cache_dir && failed=1
@@ -169,36 +177,39 @@ build_viewer() {
   # A per-process temp dir plus an atomic mv keeps concurrent first uses
   # from running a half-built bundle.
   tmp="$bundle.tmp.$$"
+  # Callers run this in an || context, where set -e is off: check each step.
   rm -rf "$tmp"
-  mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources"
-  if ! "${SWIFTC[@]}" -O -o "$tmp/$VIEWER_EXE" "$VIEWER_SRC" >&2; then
-    rm -rf "$tmp"
-    die "failed to compile the viewer"
+  mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources" ||
+    fail_build "$tmp" "cannot create the viewer bundle: $tmp"
+  "${SWIFTC[@]}" -O -o "$tmp/$VIEWER_EXE" "$VIEWER_SRC" >&2 ||
+    fail_build "$tmp" "failed to compile the viewer"
+  if ! { cp "$VIEWER_PLIST" "$tmp/Contents/Info.plist" &&
+    cp "$VIEWER_ICON" "$tmp/Contents/Resources/AppIcon.icns"; }; then
+    fail_build "$tmp" "failed to assemble the viewer bundle: $tmp"
   fi
-  cp "$VIEWER_PLIST" "$tmp/Contents/Info.plist"
-  cp "$VIEWER_ICON" "$tmp/Contents/Resources/AppIcon.icns"
   # Install under a lock, so no build moves its temp dir into a bundle that
-  # another build is deleting.
-  lock="$bundle.lock"
-  damaged="$bundle.damaged.$$"
-  for ((i = 0; i < LOCK_TRIES; i++)); do
-    mkdir "$lock" 2>/dev/null && break
-    # A lock older than LOCK_STALE belongs to a dead build. Judge by its age,
-    # not our wait, so a lock just retaken by another waiter is kept.
-    age=$(($(date +%s) - $(stat -f %m "$lock" 2>/dev/null || date +%s)))
-    ((age <= LOCK_STALE)) || rmdir "$lock" 2>/dev/null || true
+  # another build is deleting. The lock links are never removed, so a dead
+  # owner's lock is passed over, never deleted (see take_lock).
+  me="$(exec sh -c 'printf %s "$PPID"')"
+  for ((i = 0; ; i++)); do
+    take_lock "$bundle.lock" "$me" && break
+    ((i < LOCK_TRIES)) ||
+      fail_build "$tmp" "timed out waiting for the install lock: $bundle.lock"
     sleep "$LOCK_POLL"
   done
+  damaged="$bundle.damaged.$$"
   if ! bundle_ok "$bundle"; then
     mv "$bundle" "$damaged" 2>/dev/null || true
     [[ -e "$bundle" ]] || mv "$tmp" "$bundle" || true
   fi
-  rm -rf "$tmp" "$damaged" "$lock"
+  : >"$LOCK_LINK.done"
+  rm -rf "$tmp" "$damaged"
   bundle_ok "$bundle" || die "failed to install the viewer bundle: $bundle"
   # Other plugin versions may build or launch their bundle right now, so
   # drop only bundles, temp dirs and legacy binaries unused for over a day.
-  find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' -mtime +0 \
-    -exec rm -rf {} + 2>/dev/null || true
+  # Install lock links stay: take_lock must never reuse a lock name.
+  find "$CACHE_DIR" -maxdepth 1 -name 'html-popup-viewer-*' \
+    ! -name '*.lock.*' -mtime +0 -exec rm -rf {} + 2>/dev/null || true
   printf '%s\n' "$bundle"
 }
 
@@ -220,12 +231,13 @@ parse_wait() {
 
 # viewer_alive <dir> <pid> : true when pid is the viewer of session dir. A
 # dead viewer's pid may be recycled by an unrelated process or by another
-# session's viewer, so check the name and the --session argument.
+# session's viewer, so check the name and the --session argument. Viewers
+# started before the app bundle run as html-popup-viewer-<12 hex>.
 viewer_alive() {
   local comm args rest
   pid_alive "$2" || return 1
   comm="$(ps -ww -p "$2" -o comm= 2>/dev/null)" || return 1
-  [[ "${comm##*/}" == "$VIEWER_NAME" ]] || return 1
+  [[ "${comm##*/}" =~ ^$VIEWER_NAME(-[0-9a-f]{12})?$ ]] || return 1
   args="$(ps -ww -p "$2" -o args= 2>/dev/null)" || return 1
   # The page path or title may contain " --session ", so try each one.
   rest="$args"
@@ -451,6 +463,16 @@ startup_failed() {
   fail_with_log "$1" "$2" "viewer exited before the page was ready"
 }
 
+# exit_if_start_failed <dir> : abandon the session and exit 5 when the
+# viewer logged before writing DIR/pid: that early it logs only when it
+# fails, then exits. Callers found no pid; it is read again in case it was
+# written just after.
+exit_if_start_failed() {
+  [[ -s "$1/viewer.log" && -z "$(session_pid "$1")" ]] || return 0
+  abandon_session "$1" error "viewer failed to start"
+  startup_failed "$1" 5
+}
+
 # start_session <page> [opts...] : validate, build, start a detached viewer
 # and wait until the page is ready; sets SESSION_DIR. If the window closed
 # before that without an error (e.g. an early answer), sets EARLY_CLOSE=1.
@@ -536,16 +558,7 @@ start_session() {
       return 0
     fi
     [[ -n "$pid" ]] || pid="$(session_pid "$SESSION_DIR")"
-    # Before DIR/pid the viewer logs only when it fails (bad option, no
-    # session setup), and then exits. Read DIR/pid again in case it was
-    # written just after the first read.
-    if [[ -z "$pid" && -s "$SESSION_DIR/viewer.log" ]]; then
-      pid="$(session_pid "$SESSION_DIR")"
-      if [[ -z "$pid" ]]; then
-        abandon_session "$SESSION_DIR" error "viewer failed to start"
-        startup_failed "$SESSION_DIR" 5
-      fi
-    fi
+    [[ -n "$pid" ]] || exit_if_start_failed "$SESSION_DIR"
     if [[ -n "$pid" ]] && ! viewer_alive "$SESSION_DIR" "$pid"; then
       has_event "$SESSION_DIR" ready closed ||
         await_forced_close "$SESSION_DIR" || startup_failed "$SESSION_DIR" 5
@@ -589,6 +602,7 @@ wait_answer() {
       esac
     fi
     [[ -n "$pid" ]] || pid="$(session_pid "$dir")"
+    [[ -n "$pid" ]] || exit_if_start_failed "$dir"
     if [[ -n "$pid" ]] && ! viewer_alive "$dir" "$pid"; then
       has_event "$dir" answer closed && continue
       await_forced_close "$dir" && continue
@@ -724,6 +738,7 @@ cmd_live_send() {
       2>/dev/null)" || die "not a single JSON value: $2"
   pid="$(session_pid "$dir")"
   if [[ -z "$pid" ]] && ! has_event "$dir" closed; then
+    exit_if_start_failed "$dir"
     ready_overdue "$dir" && abandon_not_ready "$dir"
     die "window is still starting; send again: $dir" 4
   fi
@@ -772,7 +787,10 @@ cmd_live_wait() {
       await_forced_close "$dir" && continue
       die "viewer died without a closed event; see $dir/viewer.log" 5
     fi
-    [[ -n "$pid" ]] || ! ready_overdue "$dir" || abandon_not_ready "$dir"
+    if [[ -z "$pid" ]]; then
+      exit_if_start_failed "$dir"
+      ready_overdue "$dir" && abandon_not_ready "$dir"
+    fi
     deadline_passed && exit 4
     sleep "$POLL"
   done

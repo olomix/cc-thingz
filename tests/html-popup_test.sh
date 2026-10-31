@@ -361,6 +361,15 @@ test_build_cache() {
   assert "rebuilt bundle has Info.plist" test -f "$OUT/Contents/Info.plist"
   assert_eq "bundle without Info.plist compiles again" "6" \
     "$(count_lines "$calls")"
+
+  rm "$OUT/Contents/Resources/AppIcon.icns"
+  run_capture "$wrapper" build
+  assert_eq "bundle without its icon rebuilds" "0" "$RC"
+  assert_eq "bundle without its icon keeps its path" "$third" "$OUT"
+  assert "rebuilt bundle has the icon" \
+    test -f "$OUT/Contents/Resources/AppIcon.icns"
+  assert_eq "bundle without its icon compiles again" "7" \
+    "$(count_lines "$calls")"
   unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_CALLS
 }
 
@@ -382,6 +391,10 @@ test_build_prune() {
   mkdir -p "$bin/html-popup-viewer-111111111111.app/Contents"
   touch -t 202001010000 "$old.app" "$old.app.tmp.1" "$old" "$old.tmp.2" \
     "$current"
+  # Old install lock metadata, including a released lock of a dead owner.
+  touch -h -t 202001010000 "$current.lock.1" "$current.lock.1.done"
+  ln -s "$(dead_pid)" "$old.app.lock.1"
+  touch -h -t 202001010000 "$old.app.lock.1"
   run_capture "$wrapper" build
   assert_eq "cached build exits 0" "0" "$RC"
   assert "a cached build refreshes its bundle" \
@@ -399,6 +412,18 @@ test_build_prune() {
   assert "recently used bundle is kept" \
     test -d "$bin/html-popup-viewer-111111111111.app"
   assert "rebuilt bundle is executable" test -x "$(bundle_exec "$OUT")"
+  # take_lock must never reuse a lock name, so lock links outlive pruning.
+  assert "old install lock link is kept" test -L "$current.lock.1"
+  assert "old install lock release is kept" test -e "$current.lock.1.done"
+  assert "lock of a pruned bundle is kept" test -L "$old.app.lock.1"
+  assert "rebuild takes the next lock" test -L "$current.lock.2"
+  assert "rebuild releases its lock" test -e "$current.lock.2.done"
+  touch -h -t 202001010000 "$current".lock.*
+  rm -rf "$current"
+  run_capture env CLAUDE_PLUGIN_DATA="$bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC" \
+    "$wrapper" build
+  assert_eq "build after pruning old locks exits 0" "0" "$RC"
+  assert "later build takes the third lock" test -L "$current.lock.3"
 }
 
 # run_parallel_builds <cache> <n> : run n builds at once; print how many
@@ -417,6 +442,23 @@ run_parallel_builds() {
   rm -f "$1"/out*
 }
 
+# cache_bundles <dir> : entries in a viewer cache other than install lock
+# links, which are never removed (see take_lock); sorted, space separated.
+cache_bundles() {
+  dir_entries "$1" | tr ' ' '\n' | grep -v '\.lock\.' | xargs
+}
+
+# held_build_locks <bundle> : install lock links not released and not left
+# by a dead owner, one per line.
+held_build_locks() {
+  local link
+  for link in "$1".lock.*; do
+    [[ -L "$link" && ! -e "$link.done" ]] || continue
+    kill -0 "$(readlink "$link")" 2>/dev/null && basename "$link"
+  done
+  return 0
+}
+
 # The install races are a few microseconds wide, so run several rounds of
 # eight builds that finish together.
 test_build_concurrent() {
@@ -433,9 +475,11 @@ test_build_concurrent() {
     path="$(tail -n +2 <<<"$result")"
     assert_eq "round $round: concurrent builds print one path" "1" \
       "$(grep -c . <<<"$path")"
-    entries="$(dir_entries "$CLAUDE_PLUGIN_DATA")"
+    entries="$(cache_bundles "$CLAUDE_PLUGIN_DATA")"
     assert_eq "round $round: concurrent builds leave exactly one bundle" \
       "$(basename "$path")" "$entries"
+    assert "round $round: concurrent builds release the install lock" \
+      test -z "$(held_build_locks "$path")"
     assert_eq "round $round: the bundle root holds only Contents" \
       "Contents" "$(dir_entries "$path")"
     assert "round $round: the bundle executable runs" \
@@ -453,25 +497,101 @@ test_build_concurrent() {
     assert_eq "repair $round: concurrent repairs print the same path" \
       "$path" "$(tail -n +2 <<<"$result")"
     assert_eq "repair $round: concurrent repairs leave exactly one bundle" \
-      "$(basename "$path")" "$(dir_entries "$CLAUDE_PLUGIN_DATA")"
+      "$(basename "$path")" "$(cache_bundles "$CLAUDE_PLUGIN_DATA")"
     assert_eq "repair $round: the repaired bundle root holds only Contents" \
       "Contents" "$(dir_entries "$path")"
     assert "repair $round: the repaired bundle executable runs" \
       test -x "$(bundle_exec "$path")"
   done
 
-  # A lock left by a dead builder delays the repair but does not block it.
+  # A lock left by a dead builder is passed over, not deleted.
   rm "$(bundle_exec "$path")"
-  mkdir "$path.lock"
-  touch -t 202001010000 "$path.lock"
+  rm -f "$path".lock.*
+  ln -s "$(dead_pid)" "$path.lock.1"
   result="$(run_parallel_builds "$cache" 2)"
   data_dir="$CLAUDE_PLUGIN_DATA"
   unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_DELAY
   assert_eq "builds past a stale lock exit 0" "0" "$(head -n 1 <<<"$result")"
-  assert_eq "builds past a stale lock repair the bundle and drop the lock" \
-    "$(basename "$path")" "$(dir_entries "$data_dir")"
+  assert_eq "builds past a stale lock repair the bundle" \
+    "$(basename "$path")" "$(cache_bundles "$data_dir")"
   assert "the bundle repaired past a stale lock runs" \
     test -x "$(bundle_exec "$path")"
+  assert "the dead builder's lock is kept" test -L "$path.lock.1"
+  assert "builds past a stale lock release their locks" \
+    test -z "$(held_build_locks "$path")"
+}
+
+# Two builds that both find the install lock's owner dead must not both
+# install. A shim holds each at its takeover until both got there; another
+# logs every mv, so the installs can be counted.
+test_build_lock_takeover_race() {
+  skip_unless_macos "install lock takeover race" || return 0
+  local cache shim path result saved_path="$PATH"
+  new_tmpdir cache
+  shim="$cache/shim"
+  mkdir "$shim"
+  export CLAUDE_PLUGIN_DATA="$cache/bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
+  run_capture "$WRAPPER" build
+  assert_eq "first build exits 0" "0" "$RC"
+  path="$OUT"
+  rm "$(bundle_exec "$path")" "$path".lock.*
+  ln -s "$(dead_pid)" "$path.lock.1"
+  cat >"$shim/ln" <<EOF
+#!/bin/bash
+if [[ "\${!#}" == *.lock.2 ]]; then
+  : >"$shim/arrived.\$\$"
+  for ((i = 0; i < 200; i++)); do
+    (("\$(find "$shim" -name 'arrived.*' | wc -l)" >= 2)) && break
+    sleep 0.05
+  done
+fi
+exec /bin/ln "\$@"
+EOF
+  cat >"$shim/mv" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >>"$shim/mv.log"
+exec /bin/mv "\$@"
+EOF
+  chmod +x "$shim/ln" "$shim/mv"
+  export PATH="$shim:$PATH"
+  result="$(run_parallel_builds "$cache" 2)"
+  export PATH="$saved_path"
+  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC
+  assert_eq "racing takeovers exit 0" "0" "$(head -n 1 <<<"$result")"
+  assert_eq "both builds reached the takeover together" "2" \
+    "$(find "$shim" -name 'arrived.*' | grep -c .)"
+  assert_eq "exactly one racing build installs" "1" \
+    "$(grep -c "\.tmp\.[0-9]* $path\$" "$shim/mv.log")"
+  assert_eq "racing takeovers leave one bundle" "$(basename "$path")" \
+    "$(cache_bundles "$cache/bin")"
+  assert "the bundle installed by the race runs" \
+    test -x "$(bundle_exec "$path")"
+  assert "the dead builder's lock is kept" test -L "$path.lock.1"
+  assert "racing takeovers release their locks" \
+    test -z "$(held_build_locks "$path")"
+}
+
+# A build that cannot get the install lock in time fails, not installs.
+test_build_lock_timeout() {
+  skip_unless_macos "install lock timeout" || return 0
+  local cache path start
+  new_tmpdir cache
+  export CLAUDE_PLUGIN_DATA="$cache/bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
+  run_capture "$WRAPPER" build
+  path="$OUT"
+  rm "$(bundle_exec "$path")" "$path".lock.*
+  ln -s "$$" "$path.lock.1"
+  start=$SECONDS
+  run_capture env HTML_POPUP_LOCK_WAIT=1 "$WRAPPER" build
+  unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC
+  assert_eq "build with a held install lock exits 2" "2" "$RC"
+  assert "the lock wait is bounded" test $((SECONDS - start)) -le 4
+  assert "the held lock is reported" contains "install lock" "$ERR"
+  assert "build with a held lock prints no path" test -z "$OUT"
+  assert "build with a held lock does not install" \
+    test ! -e "$(bundle_exec "$path")"
+  assert "build with a held lock leaves no temp dir" \
+    test -z "$(find "$cache/bin" -name '*.tmp.*')"
 }
 
 # --- Tests: check and build errors --------------------------------------------
@@ -561,6 +681,28 @@ test_compiler_failure() {
     contains "simulated compile failure" "$ERR"
   left="$(dir_entries "$cache/bin")"
   assert_eq "failed compile leaves no bundle or temp dir" "" "$left"
+}
+
+# A failed copy into the bundle fails the build and leaves nothing cached.
+test_bundle_assembly_failure() {
+  skip_unless_macos "bundle assembly failure" || return 0
+  local cache shim
+  new_tmpdir cache
+  shim="$cache/shim"
+  mkdir "$shim"
+  cat >"$shim/cp" <<'EOF'
+#!/bin/bash
+[[ "${!#}" == */AppIcon.icns ]] && exit 1
+exec /bin/cp "$@"
+EOF
+  chmod +x "$shim/cp"
+  run_capture env PATH="$shim:$PATH" CLAUDE_PLUGIN_DATA="$cache/bin" \
+    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$WRAPPER" build
+  assert_eq "failed icon copy exits 2" "2" "$RC"
+  assert "failed icon copy is reported" contains "assemble" "$ERR"
+  assert "failed icon copy prints no path" test -z "$OUT"
+  assert_eq "failed icon copy leaves no bundle or temp dir" "" \
+    "$(dir_entries "$cache/bin")"
 }
 
 test_missing_bundle_inputs() {
@@ -1049,16 +1191,17 @@ wrap() {
   fi
 }
 
-# fake_session <var> <pid|live> [events...] : make a session dir without a
-# real viewer and store its path in <var>. `live` starts an idle fake viewer
-# for the dir (see idle_viewer) and records its pid.
+# fake_session <var> <pid|live|live:NAME> [events...] : make a session dir
+# without a real viewer and store its path in <var>. `live` starts an idle
+# fake viewer for the dir (see idle_viewer), named NAME if given, and records
+# its pid.
 fake_session() {
   local var="$1" pid="$2" dir line
   shift 2
   dir="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
   mkfifo "$dir/in"
-  if [[ "$pid" == live ]]; then
-    idle_viewer "$dir"
+  if [[ "$pid" == live || "$pid" == live:* ]]; then
+    idle_viewer "$dir" "${pid#live:}"
     pid="$IDLE_PID"
   fi
   printf '%s\n' "$pid" >"$dir/pid"
@@ -1078,17 +1221,20 @@ dead_pid() {
   printf '%s' "$pid"
 }
 
-# idle_viewer <dir> : set IDLE_PID to a tracked idle process that looks like
-# the viewer of session dir: named like one, with --session DIR in its args.
+# idle_viewer <dir> [name] : set IDLE_PID to a tracked idle process that
+# looks like the viewer of session dir: named like one (or NAME, if not
+# `live`), with --session DIR in its args.
 # Like the viewer it holds the FIFO open but never reads it. It is not our
 # child, so once killed it is reaped and kill -0 fails. Short sleeps leave
 # no orphan behind when it is killed.
 idle_viewer() {
+  local name="${2:-live}"
+  [[ "$name" != live ]] || name="$VIEWER_NAME"
   # shellcheck disable=SC2016 # loop code for the idle bash, not for us
   (
-    exec -a "$VIEWER_NAME" /bin/bash -c \
+    exec -a "$name" /bin/bash -c \
       'exec 3<>"$2/in"; for ((i = 0; i < 600; i++)); do sleep 0.2; done' \
-      "$VIEWER_NAME" --session "$1" >/dev/null 2>&1 &
+      "$name" --session "$1" >/dev/null 2>&1 &
     printf '%s' "$!" >"$1.idle"
   )
   IDLE_PID="$(cat "$1.idle")"
@@ -1291,6 +1437,34 @@ test_wrapper_session_identity() {
   assert "other session's viewer survives stale cleanup" kill -0 "$pid"
   wrap - live send "$other" '1'
   assert_eq "other session still accepts sends" "0" "$RC"
+}
+
+# A viewer started before the app bundle runs as html-popup-viewer-<hash>
+# and must still be recognised after an update; other suffixes are not.
+test_wrapper_legacy_viewer() {
+  skip_unless_macos "legacy viewer name" || return 0
+  new_tmpdir WRAP_TMP
+  local session pid
+  fake_session session "live:$VIEWER_NAME-0123456789ab" \
+    '{"seq":1,"type":"ready"}'
+  pid="$(session_pid_of "$session")"
+
+  wrap - live send "$session" '1'
+  assert_eq "send to a legacy viewer exits 0" "0" "$RC"
+  touch -t 202001010000 "$session"
+  wrap - show "$WRAP_TMP/no-such-page.html"
+  assert "stale cleanup keeps a live legacy session" test -d "$session"
+  wrap - live close "$session"
+  assert_eq "close of a legacy viewer exits 0" "0" "$RC"
+  assert "legacy viewer is terminated" contains "terminating it" "$ERR"
+  assert "legacy viewer is gone" sh -c "! kill -0 $pid 2>/dev/null"
+
+  fake_session session "live:$VIEWER_NAME-xyz" '{"seq":1,"type":"ready"}'
+  pid="$(session_pid_of "$session")"
+  wrap - live send "$session" '1'
+  assert_eq "send to a wrongly suffixed name exits 1" "1" "$RC"
+  wrap - live close "$session"
+  assert "wrongly suffixed process survives close" kill -0 "$pid"
 }
 
 # read_fifo <dir> <out> : copy the session FIFO to out until killed; sets
@@ -2155,6 +2329,34 @@ test_wrapper_starting_session() {
 
   assert_live_overdue_abandons wait --wait 5
   assert_live_overdue_abandons send '{"a":1}'
+
+  assert_start_failure_reported ask --resume DIR --wait 5
+  assert_start_failure_reported live wait DIR --wait 5
+  assert_start_failure_reported live send DIR '{"a":1}'
+}
+
+# assert_start_failure_reported <args...> : on a starting session whose
+# viewer logged a failure before its pid, the wrapper (args with DIR in
+# place of the session) exits 5 at once with the log tail and abandons it.
+assert_start_failure_reported() {
+  local session cmd="$*" start arg
+  local -a args=()
+  session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
+  printf '%s\n' "$(($(date +%s) + 60))" >"$session/ready_by"
+  printf 'html-popup-viewer: bad option\n' >"$session/viewer.log"
+  for arg in "$@"; do
+    [[ "$arg" == DIR ]] && arg="$session"
+    args+=("$arg")
+  done
+  start=$SECONDS
+  wrap - "${args[@]}"
+  assert_eq "$cmd after an early viewer failure exits 5" "5" "$RC"
+  assert "$cmd reports the early failure at once" \
+    test $((SECONDS - start)) -le 3
+  assert "$cmd shows the log tail" contains "bad option" "$ERR"
+  assert "$cmd abandons the session" test -e "$session/abandoned"
+  assert_eq "$cmd appends closed/error" "error" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
 }
 
 # assert_live_overdue_abandons <subcmd> [args...] : `live <subcmd>` on a
@@ -2573,11 +2775,14 @@ main() {
   test_build_cache
   test_build_prune
   test_build_concurrent
+  test_build_lock_takeover_race
+  test_build_lock_timeout
   test_missing_jq
   test_check_ok
   test_missing_compiler
   test_unwritable_cache
   test_compiler_failure
+  test_bundle_assembly_failure
   test_missing_bundle_inputs
   test_real_build
   test_viewer_startup
@@ -2598,6 +2803,7 @@ main() {
   test_wrapper_fake_sessions
   test_wrapper_recycled_pid
   test_wrapper_session_identity
+  test_wrapper_legacy_viewer
   test_wrapper_concurrent_sends
   test_wrapper_stale_lock_race
   test_wrapper_released_lock_reuse

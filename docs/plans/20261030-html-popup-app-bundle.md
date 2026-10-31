@@ -237,15 +237,23 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
   `{ declare -f build_viewer; cat swift Info.plist AppIcon.icns; } |
   shasum -a 256`: the `build_viewer` body is part of the key, so a change
   to how the bundle is assembled also rebuilds.
-- Compile and assemble into `<bundle>.tmp.$$/` without a lock. Install
-  under the `mkdir` lock `<bundle>.lock`: if the bundle passes `bundle_ok`
-  (executable and `Info.plist` present), drop our temp dir and use it;
-  otherwise rename a damaged bundle to `<bundle>.damaged.$$`, `rm -rf` it
-  and `mv "$tmp" "$bundle"`. Since installs are serialized, no temp dir
-  lands inside a bundle (BSD `mv` has no `-T`) and a bundle passing
-  `bundle_ok` is never deleted. Waiters poll every 0.1 s; a lock older than
-  5 s (by its mtime) belongs to a dead build and is removed. The bundle
-  root must contain only `Contents`.
+- Compile and assemble into `<bundle>.tmp.$$/` without a lock; every step
+  (mkdir, compile, plist and icon copies) is checked, and a failure drops
+  the temp dir and exits 2 (callers run `build_viewer` in an `||` context,
+  where `set -e` is off). Install under the lock `<bundle>.lock.N` (the
+  same `take_lock` scheme as the send and close locks: symlinks to the
+  owner pid, released by `<bundle>.lock.N.done`, never removed, so a dead
+  owner's lock is passed over and exactly one waiter takes the next one):
+  if the bundle passes `bundle_ok` (executable, `Info.plist` and
+  `AppIcon.icns` present), drop our temp dir and use it; otherwise rename a
+  damaged bundle to `<bundle>.damaged.$$`, `rm -rf` it and
+  `mv "$tmp" "$bundle"`. Since installs are serialized, no temp dir lands
+  inside a bundle (BSD `mv` has no `-T`) and a bundle passing `bundle_ok`
+  is never deleted. Waiters poll every 0.1 s for up to
+  `HTML_POPUP_LOCK_WAIT` s (default 10), then exit 2 without installing.
+  Lock links and their `.done` markers are never pruned, so a lock name is
+  never reused (2 small entries per install, which is rare). The
+  bundle root must contain only `Contents`.
 - `build` prints the bundle path. Touch the bundle on a cache hit.
 - Prune `html-popup-viewer-*.app` and `*.app.tmp.*` unused for over a day
   with `rm -rf`, and legacy loose `html-popup-viewer-<hash>` binaries.
@@ -274,11 +282,15 @@ $CACHE_DIR/html-popup-viewer-<hash>.app/
 ### Pid handshake
 - The viewer writes `DIR/pid` itself; the wrapper only reads it (no
   `pgrep` fallback), lazily in each wait loop, and `viewer_alive` checks
-  the process name `html-popup-viewer` plus `--session DIR`.
+  the process name `html-popup-viewer` (or the pre-bundle
+  `html-popup-viewer-<12 hex>`, so viewers still running across an update
+  keep working) plus `--session DIR`.
 - Before `DIR/pid` exists the viewer writes to its log only when it fails
   (bad option, session setup), so a non-empty `viewer.log` with no pid
   ends startup at once: the session is abandoned and the wrapper exits 5
-  with the log tail. Every "not ready" exit 3 also prints the log tail.
+  with the log tail. `ask --resume`, `live wait` and `live send` on a
+  still-starting session apply the same check. Every "not ready" exit 3
+  also prints the log tail.
 - `HTML_POPUP_READY_WAIT` overrides the 10 s ready deadline (tests).
 - The wait is bounded by the remaining ready budget (`ready_by`, and the
   `ask --wait` budget), not by `CLOSE_WAIT`.
