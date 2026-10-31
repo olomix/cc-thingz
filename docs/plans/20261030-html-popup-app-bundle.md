@@ -177,12 +177,13 @@ launched with `open -n … --stdout /dev/null --stderr DIR/viewer.log
   unsigned bundle.
 - **Launch through LaunchServices:** `open -n -a <bundle> … --args PAGE
   --session DIR …`. The process is a child of launchd, so the double fork
-  goes away. `open` does not report the pid, so the wrapper finds the
-  viewer by its `--session DIR` argument (see Pid handshake).
+  goes away. `open` does not report the pid, so the viewer writes it to
+  `DIR/pid` itself and the wrapper reads it (see Pid handshake).
 - **Regular app:** `.regular` outside test mode; the floating fallback is
   removed in the same task as the `open` launch (they only work together).
-- **Identity check unchanged:** the executable inside the bundle keeps the
-  name `html-popup-viewer-<hash>`, so `viewer_alive` keeps working.
+- **Identity check:** `CFBundleExecutable` is the fixed name
+  `html-popup-viewer` (the hash stays in the bundle name), and
+  `viewer_alive` matches that name plus `--session DIR`.
 
 ## Technical Details
 
@@ -419,6 +420,8 @@ Result: on macOS 27 `mv` onto an existing non-empty bundle fails with
 install step ignores the `mv` status, removes our temp dir from either
 place and then requires the bundle executable to exist. The fake-swiftc
 stub writes its pid unless built with `FAKE_SWIFTC_NO_PID=1`.
+(Superseded by review fixes: the install now runs under a lock and
+`FAKE_SWIFTC_NO_PID` is gone.)
 
 ### Task 4: Launch through LaunchServices as a regular app
 
@@ -431,8 +434,8 @@ stub writes its pid unless built with `FAKE_SWIFTC_NO_PID=1`.
 - [x] wrapper: launch with `${HTML_POPUP_OPEN:-open} -n [-g] -a …
       --stdout /dev/null --stderr LOG --args …` using absolute paths; drop
       the double fork
-- [x] wrapper: pid handshake as in Technical Details (find the viewer by
-      `--session DIR`, bounded by the ready budget, "still starting"
+- [x] wrapper: pid handshake as in Technical Details (read `DIR/pid`,
+      bounded by the ready budget, "still starting"
       sessions accepted by `require_session`, `DIR/abandoned` on give-up)
 - [x] viewer: `.regular` outside test mode, `.accessory` in test mode;
       remove the floating fallback; exit early on `DIR/abandoned` (after
@@ -462,6 +465,8 @@ lazily (DIR/pid, else `pgrep -f -- "--session DIR"` checked by
 `agent`, and any wait past the ready deadline with no viewer abandons it
 (exit 3). A late viewer exits 3 without events. `fake-open.sh` also
 records its arguments (`FAKE_OPEN_ARGS`) and can fail (`FAKE_OPEN_FAIL`).
+(Superseded by review fixes: `find_viewer` and the `pgrep -f` fallback are
+gone; the wrapper reads only `DIR/pid`, see Pid handshake.)
 
 ### Task 5: Verify acceptance criteria
 - [x] verify the bundle is built locally, launched with `open -n -a`, uses

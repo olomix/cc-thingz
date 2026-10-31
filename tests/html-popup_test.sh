@@ -21,7 +21,7 @@ TEMPLATE="$PLUGIN_DIR/assets/template.html"
 SOLAR="$PLUGIN_DIR/examples/solar-2025"
 SKILL_MD="$PLUGIN_DIR/skills/html-popup/SKILL.md"
 # The wrapper only treats processes named like the viewer as one.
-FAKE_VIEWER_NAME=html-popup-viewer
+VIEWER_NAME=html-popup-viewer
 
 PASS_COUNT=0
 SKIP_COUNT=0
@@ -281,7 +281,7 @@ test_dispatch() {
 
 # bundle_exec <bundle> : the viewer executable inside a built bundle.
 bundle_exec() {
-  printf '%s/Contents/MacOS/html-popup-viewer' "$1"
+  printf '%s/Contents/MacOS/%s' "$1" "$VIEWER_NAME"
 }
 
 # matches <regex> <string> : true when string matches the extended regex.
@@ -303,15 +303,14 @@ test_build_cache() {
   assert_eq "build exits 0" "0" "$RC"
   first="$OUT"
   assert "bundle is named after an input hash" \
-    matches "^$cache/bin/html-popup-viewer-[0-9a-f]{12}\\.app\$" "$first"
+    matches "^$cache/bin/$VIEWER_NAME-[0-9a-f]{12}\\.app\$" "$first"
   assert_eq "bundle root holds only Contents" "Contents" \
     "$(dir_entries "$first")"
-  assert "bundle executable is html-popup-viewer" \
-    test -x "$first/Contents/MacOS/html-popup-viewer"
+  assert "bundle executable is $VIEWER_NAME" test -x "$(bundle_exec "$first")"
   assert "bundle has the icon" \
     cmp -s "$root/viewer/AppIcon.icns" "$first/Contents/Resources/AppIcon.icns"
   plist="$first/Contents/Info.plist"
-  assert_eq "CFBundleExecutable names the executable" html-popup-viewer \
+  assert_eq "CFBundleExecutable names the executable" "$VIEWER_NAME" \
     "$(plutil -extract CFBundleExecutable raw -o - "$plist")"
   assert_eq "CFBundleName is HTML Popup" "HTML Popup" \
     "$(plutil -extract CFBundleName raw -o - "$plist")"
@@ -422,7 +421,7 @@ run_parallel_builds() {
 # eight builds that finish together.
 test_build_concurrent() {
   skip_unless_macos "concurrent builds" || return 0
-  local cache round result path entries
+  local cache round result path entries data_dir
   new_tmpdir cache
   export HTML_POPUP_SWIFTC="$FAKE_SWIFTC" FAKE_SWIFTC_DELAY=0.3
 
@@ -466,10 +465,11 @@ test_build_concurrent() {
   mkdir "$path.lock"
   touch -t 202001010000 "$path.lock"
   result="$(run_parallel_builds "$cache" 2)"
+  data_dir="$CLAUDE_PLUGIN_DATA"
   unset CLAUDE_PLUGIN_DATA HTML_POPUP_SWIFTC FAKE_SWIFTC_DELAY
   assert_eq "builds past a stale lock exit 0" "0" "$(head -n 1 <<<"$result")"
   assert_eq "builds past a stale lock repair the bundle and drop the lock" \
-    "$(basename "$path")" "$(dir_entries "$cache/bin4")"
+    "$(basename "$path")" "$(dir_entries "$data_dir")"
   assert "the bundle repaired past a stale lock runs" \
     test -x "$(bundle_exec "$path")"
 }
@@ -1086,9 +1086,9 @@ dead_pid() {
 idle_viewer() {
   # shellcheck disable=SC2016 # loop code for the idle bash, not for us
   (
-    exec -a "$FAKE_VIEWER_NAME" /bin/bash -c \
+    exec -a "$VIEWER_NAME" /bin/bash -c \
       'exec 3<>"$2/in"; for ((i = 0; i < 600; i++)); do sleep 0.2; done' \
-      "$FAKE_VIEWER_NAME" --session "$1" >/dev/null 2>&1 &
+      "$VIEWER_NAME" --session "$1" >/dev/null 2>&1 &
     printf '%s' "$!" >"$1.idle"
   )
   IDLE_PID="$(cat "$1.idle")"
@@ -2128,7 +2128,7 @@ test_wrapper_launch_args() {
 test_wrapper_starting_session() {
   skip_unless_macos "still-starting session" || return 0
   new_tmpdir WRAP_TMP
-  local session cmd
+  local session
   session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
   printf '%s\n' "$(($(date +%s) + 60))" >"$session/ready_by"
 
@@ -2153,21 +2153,22 @@ test_wrapper_starting_session() {
   assert_eq "resume past the deadline appends closed/error" "error" \
     "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
 
-  for cmd in "live wait" "live send"; do
-    session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
-    printf '%s\n' "$(($(date +%s) - 1))" >"$session/ready_by"
-    # shellcheck disable=SC2086 # split "live wait" into two words
-    if [[ "$cmd" == "live wait" ]]; then
-      wrap - $cmd "$session" --wait 5
-    else
-      wrap - $cmd "$session" '{"a":1}'
-    fi
-    assert_eq "$cmd past the deadline with no viewer exits 3" "3" "$RC"
-    assert "$cmd past the deadline abandons the session" \
-      test -e "$session/abandoned"
-    assert_eq "$cmd past the deadline appends closed/error" "error" \
-      "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
-  done
+  assert_live_overdue_abandons wait --wait 5
+  assert_live_overdue_abandons send '{"a":1}'
+}
+
+# assert_live_overdue_abandons <subcmd> [args...] : `live <subcmd>` on a
+# session past its ready deadline with no viewer exits 3 and abandons it.
+assert_live_overdue_abandons() {
+  local session cmd="live $1"
+  session="$(mktemp -d "$WRAP_TMP/html-popup.XXXXXX")"
+  printf '%s\n' "$(($(date +%s) - 1))" >"$session/ready_by"
+  wrap - live "$1" "$session" "${@:2}"
+  assert_eq "$cmd past the deadline with no viewer exits 3" "3" "$RC"
+  assert "$cmd past the deadline abandons the session" \
+    test -e "$session/abandoned"
+  assert_eq "$cmd past the deadline appends closed/error" "error" \
+    "$(tail -n 1 "$session/events.jsonl" | jq -r .reason)"
 }
 
 # --- Tests: wrapper with the real viewer --------------------------------------

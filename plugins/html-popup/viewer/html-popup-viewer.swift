@@ -195,6 +195,15 @@ func startSession(_ dir: String) throws -> (events: EventLog, inbound: Int32) {
     return (try EventLog(path: dir + "/events.jsonl"), inbound)
 }
 
+// The wrapper already reported this session as failed and wrote its closed
+// event; a late viewer must not open an untracked window.
+func exitIfAbandoned(_ dir: String) {
+    if FileManager.default.fileExists(atPath: dir + "/abandoned") {
+        log("session abandoned by the wrapper; exiting")
+        exit(CloseReason.error.exitCode)
+    }
+}
+
 // Reads DIR/in on a background thread and hands each complete line to
 // `deliver` on the main thread. Writes over PIPE_BUF are not atomic, so a
 // line can span several reads and is buffered until its newline arrives.
@@ -676,15 +685,7 @@ do {
 }
 let events = session.events
 
-// The wrapper already reported this session as failed and wrote its closed
-// event; a late viewer must not open an untracked window.
-func exitIfAbandoned() {
-    if FileManager.default.fileExists(atPath: options.session + "/abandoned") {
-        log("session abandoned by the wrapper; exiting")
-        exit(3)
-    }
-}
-exitIfAbandoned()
+exitIfAbandoned(options.session)
 
 let pageURL = URL(fileURLWithPath: options.page).standardizedFileURL
 var inputError: String?
@@ -701,7 +702,7 @@ if !FileManager.default.isReadableFile(atPath: pageURL.path) {
 
 // A macOS access prompt for protected folders can block the reads above;
 // an abandoned session already has its closed event.
-exitIfAbandoned()
+exitIfAbandoned(options.session)
 if let inputError { events.close(.error, message: inputError) }
 
 let app = NSApplication.shared
