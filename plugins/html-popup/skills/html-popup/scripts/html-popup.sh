@@ -26,10 +26,10 @@
 #                           (default 10; tests shorten it)
 set -euo pipefail
 
-PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VIEWER_SRC="$PLUGIN_ROOT/viewer/html-popup-viewer.swift"
-VIEWER_PLIST="$PLUGIN_ROOT/viewer/Info.plist"
-VIEWER_ICON="$PLUGIN_ROOT/viewer/AppIcon.icns"
+SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VIEWER_SRC="$SKILL_ROOT/viewer/html-popup-viewer.swift"
+VIEWER_PLIST="$SKILL_ROOT/viewer/Info.plist"
+VIEWER_ICON="$SKILL_ROOT/viewer/AppIcon.icns"
 VIEWER_NAME=html-popup-viewer
 VIEWER_EXE="Contents/MacOS/$VIEWER_NAME"
 CACHE_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/Library/Caches/html-popup}"

@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/session-park"
-SESSION_PARK="$PLUGIN_DIR/scripts/session-park.sh"
+SESSION_PARK="$PLUGIN_DIR/skills/session-park/scripts/session-park.sh"
 MARKETPLACE="$REPO_ROOT/.claude-plugin/marketplace.json"
 
 SESSION_ID="11111111-2222-3333-4444-555555555555"

@@ -17,13 +17,45 @@ This is a hard rule for both **writing code** and **reviewing changes**:
   `plugin.json`, `marketplace.json`) is intentional and allowed.
 * When reviewing a diff, flag any newly added personal data as a blocker.
 
+## Plugin layout and paths
+
+Every plugin here is installed as a plugin from the local `directory`
+marketplace (this checkout). Never symlink a skill into
+`~/.claude/skills/`. A local-directory plugin loads in place, so an edit
+applies at the next session start or after `/reload-plugins`, with no
+version bump.
+
+Where a plugin keeps its scripts depends on what else it ships:
+
+* **Self-contained skill** — the plugin has a skill and nothing else (no
+  `agents/`, no `hooks/`). Keep every file the skill uses inside the skill
+  directory (`skills/<name>/scripts/`, `assets/`, ...). Refer to them from
+  `SKILL.md` as `${CLAUDE_SKILL_DIR}/scripts/...`. Examples: `html-popup`,
+  `session-park`.
+* **Skill with other components** — the plugin also ships an agent or a
+  hook. Keep the scripts at the plugin root (`plugins/<name>/scripts/`) and
+  refer to them everywhere — `SKILL.md`, `agents/*.md`, `hooks/hooks.json` —
+  as `${CLAUDE_PLUGIN_ROOT}/scripts/...`. The skill is not usable without
+  those components, so it never needs to work outside the plugin. Examples:
+  `fsnotes`, `gh-lookup` (agents), `dotfiles` (hook).
+
+Use one variable per plugin. Never write a fallback such as
+`${CLAUDE_PLUGIN_ROOT:-...}` or a `${CLAUDE_SKILL_DIR}/../..` path. In
+`hooks.json` and agent files only `${CLAUDE_PLUGIN_ROOT}` exists.
+
+A script finds its own siblings relative to itself
+(`"$(dirname "${BASH_SOURCE[0]}")"`), never through these variables, so the
+tests can run it straight from the repository.
+
 ## Compiled helpers and GUI tests
 
 * Do not commit compiled binaries. A plugin that needs native code ships the
-  source (e.g. `plugins/html-popup/viewer/*.swift`) and its wrapper compiles
-  it on first use into a cache keyed by the source hash.
+  source (e.g. `plugins/html-popup/skills/html-popup/viewer/*.swift`) and
+  its wrapper compiles it on first use into a cache keyed by the source
+  hash.
 * Generated static assets may be committed together with the dev script
-  that regenerates them: `plugins/html-popup/viewer/AppIcon.icns` comes from
+  that regenerates them:
+  `plugins/html-popup/skills/html-popup/viewer/AppIcon.icns` comes from
   `AppIcon.svg` via `viewer/make-icon.sh`; rerun it after editing the SVG.
 * Swap external tools through env vars so tests never run the real ones:
   `HTML_POPUP_SWIFTC` (compiler) and `HTML_POPUP_OPEN` (LaunchServices

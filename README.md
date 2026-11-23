@@ -193,13 +193,14 @@ Pages talk to Claude through an injected `window.htmlPopup` object
 (`data`, `answer`, `cancel`, `send`, `onMessage`), so they need no script
 include. Data is passed as a JSON file with `--data` rather than inlined into
 the page. Everything goes through one wrapper script,
-`plugins/html-popup/scripts/html-popup.sh` (`check`, `build`, `show`, `ask`,
-`live start|send|wait|close`). Its exit codes: 0 ok, 1 window closed
-without an answer (or its `--timeout` hit), 2 usage or setup error, 3 page or
-data invalid or page not ready, 4 `--wait` expired with the window still
-open (call again), 5 viewer crashed; the skill's `SKILL.md` has details. The
-plugin also ships a native-looking starter page (`assets/template.html`,
-light/dark aware) and a live example, `examples/solar-2025/`, a 2025 US
+`plugins/html-popup/skills/html-popup/scripts/html-popup.sh` (`check`,
+`build`, `show`, `ask`, `live start|send|wait|close`). Its exit codes: 0 ok,
+1 window closed without an answer (or its `--timeout` hit), 2 usage or setup
+error, 3 page or data invalid or page not ready, 4 `--wait` expired with the
+window still open (call again), 5 viewer crashed; the skill's `SKILL.md` has
+details. The skill also ships a native-looking starter page
+(`assets/template.html`, light/dark aware) and a live example,
+`examples/solar-2025/`, a 2025 US
 solar generation report from public EIA data where choosing a month gets a
 details panel computed by `run.sh`.
 
@@ -249,7 +250,7 @@ claude --resume 11111111-2222-3333-4444-555555555555
 Claude finds the note through the **fsnotes** plugin (the most recently
 modified note titled like "Unfinished Claude sessions", created if there is
 none) and writes the short title. The rest is one deterministic script,
-`plugins/session-park/scripts/session-park.sh`:
+`plugins/session-park/skills/session-park/scripts/session-park.sh`:
 
 - `session-park.sh add <note-path> <title>` — add the entry below the note's
   `# Title` line. If the note already holds the session ID, it is left
@@ -302,12 +303,15 @@ tests/gh-lookup_test.sh
 shellcheck tests/dotfiles_test.sh plugins/dotfiles/scripts/*.sh
 tests/dotfiles_test.sh
 
-shellcheck tests/html-popup_test.sh plugins/html-popup/scripts/*.sh \
-  plugins/html-popup/viewer/*.sh plugins/html-popup/examples/*/*.sh \
+shellcheck tests/html-popup_test.sh \
+  plugins/html-popup/skills/html-popup/scripts/*.sh \
+  plugins/html-popup/skills/html-popup/viewer/*.sh \
+  plugins/html-popup/skills/html-popup/examples/*/*.sh \
   tests/fixtures/fake-swiftc.sh tests/fixtures/fake-open.sh
 tests/html-popup_test.sh
 
-shellcheck tests/session-park_test.sh plugins/session-park/scripts/*.sh
+shellcheck tests/session-park_test.sh \
+  plugins/session-park/skills/session-park/scripts/*.sh
 tests/session-park_test.sh
 ```
 
@@ -325,9 +329,9 @@ its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
 `swiftc` is installed and the session is a GUI (Aqua) login, and tests that
 run the wrapper's build step or fake viewers are skipped off macOS. After
-editing `plugins/html-popup/viewer/AppIcon.svg`, run
-`plugins/html-popup/viewer/make-icon.sh` (macOS 14+) and commit the new
-`AppIcon.icns`.
+editing `plugins/html-popup/skills/html-popup/viewer/AppIcon.svg`, run
+`plugins/html-popup/skills/html-popup/viewer/make-icon.sh` (macOS 14+) and
+commit the new `AppIcon.icns`.
 
 ## License
 

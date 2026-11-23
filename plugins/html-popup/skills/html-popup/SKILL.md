@@ -15,12 +15,10 @@ You show HTML pages in a native macOS window through one wrapper script.
 The window runs detached: a Bash call that times out or is killed never
 closes it.
 
-`R` is the plugin root: `${CLAUDE_PLUGIN_ROOT}` when installed as a plugin,
-otherwise two levels above this skill's base directory (e.g. a skill
-symlinked into `~/.claude/skills/`).
+`R` is this skill's directory; every path below is relative to it.
 
 ```sh
-R="${CLAUDE_PLUGIN_ROOT:-<this skill's base directory>/../..}"
+R="${CLAUDE_SKILL_DIR}"
 P="$R/scripts/html-popup.sh"
 ```
 

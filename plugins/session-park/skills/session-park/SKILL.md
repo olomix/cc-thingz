@@ -23,13 +23,10 @@ claude --resume <session ID>
 ````
 
 The check for an existing entry and the insert are done by a deterministic
-script, `P` below. `R` is the plugin root: `${CLAUDE_PLUGIN_ROOT}` when
-installed as a plugin, otherwise two levels above this skill's base directory
-(e.g. a skill symlinked into `~/.claude/skills/`).
+script, `P` below, in this skill's directory:
 
 ```sh
-R="${CLAUDE_PLUGIN_ROOT:-<this skill's base directory>/../..}"
-P="$R/scripts/session-park.sh"
+P="${CLAUDE_SKILL_DIR}/scripts/session-park.sh"
 "$P" <command> <args...>
 ```
 
@@ -41,8 +38,7 @@ yourself to add the entry.
 ## Steps
 
 1. **Find the note with the `fsnotes` skill.** Invoke the `fsnotes:fsnotes`
-   skill (`fsnotes` when that one is also a symlinked skill) and follow its
-   search playbook: a `title` search for `unfinished claude sessions`. If the
+   skill and follow its search playbook: a `title` search for `unfinished claude sessions`. If the
    user named a different note, search for that one instead.
 
    A search hit is `relative/path:line:text`. The note path is the part
