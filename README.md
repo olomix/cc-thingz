@@ -240,6 +240,7 @@ Claude sessions.
 ````
 ## billing: retry webhook deliveries
 ```bash
+# CLAUDE_CONFIG_DIR=/path/to/claude-config
 cd /path/to/project
 claude --resume 11111111-2222-3333-4444-555555555555
 ```
@@ -253,13 +254,24 @@ none) and writes the short title. The rest is one deterministic script,
 - `session-park.sh add <note-path> <title>` — add the entry below the note's
   `# Title` line. If the note already holds the session ID, it is left
   unchanged and the script prints the heading the session is under.
-- `session-park.sh info` — print the session ID and directory only.
+- `session-park.sh newest <note-path>...` — print the most recently modified
+  of several candidate notes.
+- `session-park.sh info` — print the session ID, directory and config
+  directory only.
 
 The session ID comes from `CLAUDE_CODE_SESSION_ID`. The directory is the one
-the session started in, read from the session transcript, because
-`claude --resume` finds a session only from that directory; a later `cd`
-inside the session does not change it. `--session-id` and `--dir` override
-both.
+the session started in, read from the session transcript, so the resumed
+session starts in the same place; a later `cd` inside the session does not
+change it. `--session-id` and `--dir` override both. The comment line records
+which Claude config directory (profile) owns the session; it is a comment
+because the profile is normally selected outside the command, for example by
+direnv.
+
+A relative note path is resolved against the notes directory (the same
+lookup order as fsnotes), never against the current directory. The note is
+written in place to keep its extended attributes; its previous content is
+kept in a temp file until the write is verified, and the script prints that
+file's path if the write fails.
 
 ### Requirements
 
