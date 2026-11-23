@@ -69,6 +69,15 @@ has_description() {
   frontmatter "$1" | grep -q '^description:'
 }
 
+# no_backup_files <dir> : true when the script left no note backup in <dir>.
+no_backup_files() {
+  local file
+  for file in "$1"/session-park-backup.*; do
+    [[ -e "$file" ]] && return 1
+  done
+  return 0
+}
+
 # park <args...> : run the script with a sandboxed environment. $SANDBOX holds
 # the fake Claude config dir and the fixture notes store.
 park() {
@@ -125,6 +134,8 @@ test_skill() {
   # shellcheck disable=SC2016
   assert "skill picks the newest note with the script" \
     grep -qF '"$P" newest' "$f"
+  assert "skill says how to write an apostrophe in a path" \
+    grep -qF "'Team'\''s sessions.markdown'" "$f"
   assert "skill single-quotes the title" \
     grep -qF "\"\$P\" add '<note-path>' '<title>'" "$f"
   assert "script is executable" test -x "$SESSION_PARK"
@@ -349,15 +360,45 @@ test_failed_write() {
   note="$SANDBOX/notes/Sessions.markdown"
   original="$(cat "$note")"
 
-  # A fake cmp that always fails makes the script treat every write as
-  # unverified: the path taken when a write breaks after truncating the note.
-  mkdir "$SANDBOX/bin" "$SANDBOX/tmp"
-  printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/bin/cmp"
-  chmod +x "$SANDBOX/bin/cmp"
+  # A fake cmp that fails whenever it checks what was written to the note
+  # makes the script treat every write as unverified: the path taken when a
+  # write breaks after truncating the note. The backup check still passes.
+  mkdir "$SANDBOX/bin" "$SANDBOX/tmp" "$SANDBOX/nocp"
+  {
+    printf '#!/bin/sh\n'
+    printf 'for last; do :; done\n'
+    # shellcheck disable=SC2016
+    printf '[ "$last" = "$FAKE_CMP_NOTE" ] && exit 1\n'
+    printf 'exec "%s" "$@"\n' "$(command -v cmp)"
+  } > "$SANDBOX/bin/cmp"
+  printf '#!/bin/sh\nexit 1\n' > "$SANDBOX/nocp/cp"
+  chmod +x "$SANDBOX/bin/cmp" "$SANDBOX/nocp/cp"
+
+  # No backup, no write: the note must not be touched.
+  set +e
+  err="$(PATH="$SANDBOX/nocp:$PATH" TMPDIR="$SANDBOX/tmp" \
+    park add --session-id "$SESSION_ID" "$note" t 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "a failed backup exits 1" "1" "$rc"
+  assert "a failed backup is reported" contains "could not back up" "$err"
+  assert_eq "a failed backup leaves the note untouched" \
+    "$original" "$(cat "$note")"
+  assert "a failed backup leaves no backup file" \
+    no_backup_files "$SANDBOX/tmp"
+
+  set +e
+  err="$(PATH="$SANDBOX/nocp:$PATH" TMPDIR="$SANDBOX/missing" \
+    park add --session-id "$SESSION_ID" "$note" t 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "a failed mktemp exits 1" "1" "$rc"
+  assert_eq "a failed mktemp leaves the note untouched" \
+    "$original" "$(cat "$note")"
 
   set +e
   err="$(PATH="$SANDBOX/bin:$PATH" TMPDIR="$SANDBOX/tmp" \
-    park add --session-id "$SESSION_ID" "$note" t 2>&1 >/dev/null)"
+    FAKE_CMP_NOTE="$note" park add --session-id "$SESSION_ID" "$note" t 2>&1 >/dev/null)"
   rc=$?
   set -e
   assert_eq "an unverified write exits 1" "1" "$rc"

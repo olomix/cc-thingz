@@ -54,6 +54,9 @@ yourself to add the entry.
    "$P" newest '<path>' ['<path>'...]
    ```
 
+   Write an apostrophe inside a single-quoted path as `'\''`
+   (`'Team'\''s sessions.markdown'`).
+
    - **No hit for a note the user named:** stop and ask. Do not fall back to
      another note and do not create one.
    - **No hit for the default title:** try a `text` search for
@@ -74,7 +77,7 @@ yourself to add the entry.
    ```
 
    `<note-path>` is the path that `newest` printed, or the path the `fsnotes`
-   create playbook returned.
+   create playbook returned; an apostrophe in it is written as `'\''`.
 4. **Report the result** in one line, with an `fsnotes://` link to the note
    built by the `fsnotes` skill's link script:
    - `parked: <title>` — the entry is now at the top of the note.

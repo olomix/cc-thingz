@@ -236,24 +236,39 @@ insert_entry() {
 
 # replace_note_content <note> <new-content-file> : overwrite the note in place
 # and keep its previous content in $NOTE_BACKUP until the write is verified.
+# Every step is checked by hand: callers use `|| return`, and Bash turns
+# `set -e` off inside a function called that way.
 replace_note_content() {
-  local note="$1" new="$2"
-  NOTE_BACKUP="$(mktemp "${TMPDIR:-/tmp}/session-park-backup.XXXXXX")"
-  cp "$note" "$NOTE_BACKUP"
+  local note="$1" new="$2" backup
+  if ! backup="$(mktemp "${TMPDIR:-/tmp}/session-park-backup.XXXXXX")"; then
+    fail "could not create a backup file; $note is unchanged"
+    return 1
+  fi
+  # The note is not touched until a complete copy of it exists.
+  if ! cp "$note" "$backup" || ! cmp -s "$note" "$backup"; then
+    rm -f "$backup"
+    fail "could not back up $note; it is unchanged"
+    return 1
+  fi
+  NOTE_BACKUP="$backup"
+
   # Write in place: a rename would drop the extended attributes that FSNotes
   # and iCloud keep on the note file.
   if cat "$new" > "$note" && cmp -s "$new" "$note"; then
     rm -f "$NOTE_BACKUP"
+    NOTE_BACKUP=""
     return 0
   fi
   if cmp -s "$NOTE_BACKUP" "$note" ||
     { cat "$NOTE_BACKUP" > "$note" && cmp -s "$NOTE_BACKUP" "$note"; }; then
     rm -f "$NOTE_BACKUP"
+    NOTE_BACKUP=""
     fail "could not write $note; it is unchanged"
     return 1
   fi
   # cleanup reports where the previous content is.
   fail "could not write $note"
+  return 1
 }
 
 cmd_info() {
@@ -307,6 +322,10 @@ cmd_add() {
     printf '```\n'
   } > "$WORK_DIR/entry"
   insert_entry "$note" "$WORK_DIR/entry" > "$WORK_DIR/note"
+  if ! parked_heading "$WORK_DIR/note" "$id" >/dev/null; then
+    fail "could not build the new content of $note; it is unchanged"
+    return 1
+  fi
   replace_note_content "$note" "$WORK_DIR/note" || return 1
   printf 'parked: %s\n' "$title"
 }
