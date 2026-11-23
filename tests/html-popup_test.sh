@@ -12,14 +12,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_DIR="$REPO_ROOT/plugins/html-popup"
+SKILL_DIR="$PLUGIN_DIR/skills/html-popup"
 MARKETPLACE="$REPO_ROOT/.claude-plugin/marketplace.json"
 FAKE_SWIFTC="$SCRIPT_DIR/fixtures/fake-swiftc.sh"
 FAKE_OPEN="$SCRIPT_DIR/fixtures/fake-open.sh"
 FIXTURES="$SCRIPT_DIR/fixtures/html-popup"
-WRAPPER="$PLUGIN_DIR/scripts/html-popup.sh"
-TEMPLATE="$PLUGIN_DIR/assets/template.html"
-SOLAR="$PLUGIN_DIR/examples/solar-2025"
-SKILL_MD="$PLUGIN_DIR/skills/html-popup/SKILL.md"
+WRAPPER="$SKILL_DIR/scripts/html-popup.sh"
+TEMPLATE="$SKILL_DIR/assets/template.html"
+SOLAR="$SKILL_DIR/examples/solar-2025"
+SKILL_MD="$SKILL_DIR/SKILL.md"
 # The wrapper only treats processes named like the viewer as one.
 VIEWER_NAME=html-popup-viewer
 
@@ -151,7 +152,7 @@ test_manifest() {
   assert "plugin.json exists" test -f "$manifest"
   assert "plugin.json parses" jq empty "$manifest"
   assert_eq "plugin.json name" "html-popup" "$(jq -r .name "$manifest")"
-  assert_eq "plugin.json version" "0.1.0" "$(jq -r .version "$manifest")"
+  assert_eq "plugin.json version" "0.2.0" "$(jq -r .version "$manifest")"
   assert_eq "plugin.json license" "MIT" "$(jq -r .license "$manifest")"
   assert "plugin.json has a description" \
     test -n "$(jq -r '.description // empty' "$manifest")"
@@ -175,7 +176,7 @@ test_manifest() {
 # --- Tests: app icon assets --------------------------------------------------
 
 test_icon_assets() {
-  local viewer="$PLUGIN_DIR/viewer"
+  local viewer="$SKILL_DIR/viewer"
 
   assert "AppIcon.svg exists" test -s "$viewer/AppIcon.svg"
   assert "AppIcon.svg is an SVG" contains "<svg" "$(cat "$viewer/AppIcon.svg")"
@@ -219,12 +220,12 @@ run_capture() {
   rm -f "$err_file"
 }
 
-# copy_plugin <var> : copy the plugin into a temp dir so a test can change the
+# copy_skill <var> : copy the skill into a temp dir so a test can change the
 # viewer source without touching the repo; store the copy's root in <var>.
-copy_plugin() {
+copy_skill() {
   local copy_root
   new_tmpdir copy_root
-  cp -R "$PLUGIN_DIR/." "$copy_root/"
+  cp -R "$SKILL_DIR/." "$copy_root/"
   printf -v "$1" '%s' "$copy_root"
 }
 
@@ -292,7 +293,7 @@ matches() {
 test_build_cache() {
   skip_unless_macos "build cache" || return 0
   local root cache calls wrapper first second third plist
-  copy_plugin root
+  copy_skill root
   new_tmpdir cache
   calls="$cache/calls"
   wrapper="$root/scripts/html-popup.sh"
@@ -378,7 +379,7 @@ test_build_prune() {
   local cache bin wrapper current old
   new_tmpdir cache
   bin="$cache/bin"
-  wrapper="$PLUGIN_DIR/scripts/html-popup.sh"
+  wrapper="$SKILL_DIR/scripts/html-popup.sh"
   export CLAUDE_PLUGIN_DATA="$bin" HTML_POPUP_SWIFTC="$FAKE_SWIFTC"
 
   run_capture "$wrapper" build
@@ -429,7 +430,7 @@ test_build_prune() {
 # run_parallel_builds <cache> <n> : run n builds at once; print how many
 # failed, then the distinct paths they printed.
 run_parallel_builds() {
-  local wrapper="$PLUGIN_DIR/scripts/html-popup.sh" pids=() pid i fails=0
+  local wrapper="$SKILL_DIR/scripts/html-popup.sh" pids=() pid i fails=0
   for ((i = 0; i < $2; i++)); do
     "$wrapper" build >"$1/out$i" 2>/dev/null &
     pids+=("$!")
@@ -608,7 +609,7 @@ test_missing_jq() {
 
   run_capture env PATH="$bin" CLAUDE_PLUGIN_DATA="$cache" \
     HTML_POPUP_SWIFTC="$FAKE_SWIFTC" /bin/bash \
-    "$PLUGIN_DIR/scripts/html-popup.sh" check
+    "$SKILL_DIR/scripts/html-popup.sh" check
   assert_eq "check without jq exits 2" "2" "$RC"
   assert "check names the missing jq" contains "jq not found" "$ERR"
   assert "check does not blame the compiler" not_contains "swiftc" "$ERR"
@@ -616,7 +617,7 @@ test_missing_jq() {
   for cmd in show "live wait"; do
     # shellcheck disable=SC2086 # split "live wait" into two words
     run_capture env PATH="$bin" CLAUDE_PLUGIN_DATA="$cache" /bin/bash \
-      "$PLUGIN_DIR/scripts/html-popup.sh" $cmd "$FIXTURES/basic.html"
+      "$SKILL_DIR/scripts/html-popup.sh" $cmd "$FIXTURES/basic.html"
     assert_eq "$cmd without jq exits 2" "2" "$RC"
     assert "$cmd names the missing jq" contains "jq not found" "$ERR"
   done
@@ -627,7 +628,7 @@ test_check_ok() {
   local cache
   new_tmpdir cache
   run_capture env CLAUDE_PLUGIN_DATA="$cache" \
-    "$PLUGIN_DIR/scripts/html-popup.sh" check
+    "$SKILL_DIR/scripts/html-popup.sh" check
   assert_eq "check exits 0 when everything is present" "0" "$RC"
   assert "check reports success" contains "all checks passed" "$OUT"
 }
@@ -637,7 +638,7 @@ test_missing_compiler() {
   new_tmpdir cache
   run_capture env CLAUDE_PLUGIN_DATA="$cache" \
     HTML_POPUP_SWIFTC="$cache/no-such-swiftc" \
-    "$PLUGIN_DIR/scripts/html-popup.sh" build
+    "$SKILL_DIR/scripts/html-popup.sh" build
   assert_eq "build with a missing compiler exits 2" "2" "$RC"
   assert "build names the missing compiler" \
     contains "HTML_POPUP_SWIFTC not found" "$ERR"
@@ -654,7 +655,7 @@ test_unwritable_cache() {
   new_tmpdir parent
   chmod 555 "$parent"
   run_capture env CLAUDE_PLUGIN_DATA="$parent/cache" \
-    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$PLUGIN_DIR/scripts/html-popup.sh" build
+    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$SKILL_DIR/scripts/html-popup.sh" build
   chmod 755 "$parent"
   assert_eq "build with an unwritable cache exits 2" "2" "$RC"
   assert "build names the unwritable cache" contains "not writable" "$ERR"
@@ -662,7 +663,7 @@ test_unwritable_cache() {
 
   chmod 555 "$parent"
   run_capture env CLAUDE_PLUGIN_DATA="$parent" \
-    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$PLUGIN_DIR/scripts/html-popup.sh" check
+    HTML_POPUP_SWIFTC="$FAKE_SWIFTC" "$SKILL_DIR/scripts/html-popup.sh" check
   chmod 755 "$parent"
   assert_eq "check with a read-only cache dir exits 2" "2" "$RC"
   assert "check names the read-only cache" contains "not writable" "$ERR"
@@ -674,7 +675,7 @@ test_compiler_failure() {
   new_tmpdir cache
   run_capture env CLAUDE_PLUGIN_DATA="$cache/bin" \
     HTML_POPUP_SWIFTC="$FAKE_SWIFTC" FAKE_SWIFTC_FAIL=1 \
-    "$PLUGIN_DIR/scripts/html-popup.sh" build
+    "$SKILL_DIR/scripts/html-popup.sh" build
   assert_eq "failed compile exits 2" "2" "$RC"
   assert "failed compile is reported" contains "failed to compile" "$ERR"
   assert "compiler output is passed through" \
@@ -709,7 +710,7 @@ test_missing_bundle_inputs() {
   skip_unless_macos "missing bundle inputs" || return 0
   local root cache file
   for file in Info.plist AppIcon.icns; do
-    copy_plugin root
+    copy_skill root
     new_tmpdir cache
     rm "$root/viewer/$file"
     run_capture env CLAUDE_PLUGIN_DATA="$cache/bin" \
@@ -740,7 +741,7 @@ ensure_viewer() {
   [[ -n "$VIEWER_BIN" ]] && return 0
   new_tmpdir VIEWER_CACHE
   run_capture env CLAUDE_PLUGIN_DATA="$VIEWER_CACHE" \
-    "$PLUGIN_DIR/scripts/html-popup.sh" build
+    "$SKILL_DIR/scripts/html-popup.sh" build
   assert_eq "viewer builds for viewer tests" "0" "$RC"
   VIEWER_BIN="$(bundle_exec "$OUT")"
 }
@@ -2753,15 +2754,18 @@ test_skill() {
 
   paths="$(grep -oE '(scripts|assets|examples)/[A-Za-z0-9._/-]*[A-Za-z0-9_/]' \
     "$SKILL_MD" | sort -u)"
-  assert "SKILL.md mentions plugin paths" test -n "$paths"
+  assert "SKILL.md mentions skill paths" test -n "$paths"
   while IFS= read -r path; do
-    assert "SKILL.md path exists: $path" test -e "$PLUGIN_DIR/$path"
+    assert "SKILL.md path exists: $path" test -e "$SKILL_DIR/$path"
   done <<<"$paths"
   # shellcheck disable=SC2016 # literal text the skill must contain
-  assert "SKILL.md roots paths at CLAUDE_PLUGIN_ROOT" \
-    contains 'R="${CLAUDE_PLUGIN_ROOT:-' "$(cat "$SKILL_MD")"
+  assert "SKILL.md roots paths at CLAUDE_SKILL_DIR" \
+    contains 'R="${CLAUDE_SKILL_DIR}"' "$(cat "$SKILL_MD")"
+  # shellcheck disable=SC2016 # $1 expands in the child shell
+  assert "SKILL.md does not use CLAUDE_PLUGIN_ROOT" \
+    bash -c '! grep -q CLAUDE_PLUGIN_ROOT "$1"' _ "$SKILL_MD"
   # shellcheck disable=SC2016 # literal text the skill must contain
-  assert "SKILL.md calls the wrapper under the plugin root" \
+  assert "SKILL.md calls the wrapper under the skill directory" \
     contains 'P="$R/scripts/html-popup.sh"' "$(cat "$SKILL_MD")"
 }
 

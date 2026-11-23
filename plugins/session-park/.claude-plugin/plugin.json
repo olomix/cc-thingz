@@ -1,0 +1,11 @@
+{
+  "name": "session-park",
+  "description": "Park the current Claude Code session: add its `claude --resume` command to an FSNotes list of unfinished sessions.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oleg Lomaka"
+  },
+  "homepage": "https://github.com/olomix/cc-thingz",
+  "repository": "https://github.com/olomix/cc-thingz",
+  "license": "MIT"
+}

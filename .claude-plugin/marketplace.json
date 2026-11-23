@@ -23,6 +23,11 @@
       "name": "html-popup",
       "source": "./plugins/html-popup",
       "description": "Show generated HTML reports, charts and dialogs in a native macOS window and exchange data with them (show, ask, live modes)."
+    },
+    {
+      "name": "session-park",
+      "source": "./plugins/session-park",
+      "description": "Park the current Claude Code session: add its `claude --resume` command to an FSNotes list of unfinished sessions."
     }
   ]
 }

@@ -1,8 +1,8 @@
 # olomix-cc-thingz
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin
-marketplace. It currently ships four plugins, **fsnotes**, **gh-lookup**,
-**dotfiles**, and **html-popup**.
+marketplace. It currently ships five plugins, **fsnotes**, **gh-lookup**,
+**dotfiles**, **html-popup**, and **session-park**.
 
 ## fsnotes
 
@@ -193,13 +193,14 @@ Pages talk to Claude through an injected `window.htmlPopup` object
 (`data`, `answer`, `cancel`, `send`, `onMessage`), so they need no script
 include. Data is passed as a JSON file with `--data` rather than inlined into
 the page. Everything goes through one wrapper script,
-`plugins/html-popup/scripts/html-popup.sh` (`check`, `build`, `show`, `ask`,
-`live start|send|wait|close`). Its exit codes: 0 ok, 1 window closed
-without an answer (or its `--timeout` hit), 2 usage or setup error, 3 page or
-data invalid or page not ready, 4 `--wait` expired with the window still
-open (call again), 5 viewer crashed; the skill's `SKILL.md` has details. The
-plugin also ships a native-looking starter page (`assets/template.html`,
-light/dark aware) and a live example, `examples/solar-2025/`, a 2025 US
+`plugins/html-popup/skills/html-popup/scripts/html-popup.sh` (`check`,
+`build`, `show`, `ask`, `live start|send|wait|close`). Its exit codes: 0 ok,
+1 window closed without an answer (or its `--timeout` hit), 2 usage or setup
+error, 3 page or data invalid or page not ready, 4 `--wait` expired with the
+window still open (call again), 5 viewer crashed; the skill's `SKILL.md` has
+details. The skill also ships a native-looking starter page
+(`assets/template.html`, light/dark aware) and a live example,
+`examples/solar-2025/`, a 2025 US
 solar generation report from public EIA data where choosing a month gets a
 details panel computed by `run.sh`.
 
@@ -231,6 +232,64 @@ prompt.
 /plugin install html-popup
 ```
 
+## session-park
+
+Lets Claude park the session you are in so you can come back to it: "park
+this session" adds an entry to the top of your FSNotes note of unfinished
+Claude sessions.
+
+````
+## billing: retry webhook deliveries
+```bash
+# CLAUDE_CONFIG_DIR=/path/to/claude-config
+cd /path/to/project
+claude --resume 11111111-2222-3333-4444-555555555555
+```
+````
+
+Claude finds the note through the **fsnotes** plugin (the most recently
+modified note titled like "Unfinished Claude sessions", created if there is
+none) and writes the short title. The rest is one deterministic script,
+`plugins/session-park/skills/session-park/scripts/session-park.sh`:
+
+- `session-park.sh add <note-path> <title>` — add the entry below the note's
+  `# Title` line. If the note already holds the session ID, it is left
+  unchanged and the script prints the heading the session is under.
+- `session-park.sh newest <note-path>...` — print the most recently modified
+  of several candidate notes.
+- `session-park.sh info` — print the session ID, directory and config
+  directory only.
+
+The session ID comes from `CLAUDE_CODE_SESSION_ID`. The directory is the one
+the session started in, read from the session transcript, so the resumed
+session starts in the same place; a later `cd` inside the session does not
+change it. `--session-id` and `--dir` override both. The comment line records
+which Claude config directory (profile) owns the session; it is a comment
+because the profile is normally selected outside the command, for example by
+direnv.
+
+A relative note path is resolved against the notes directory (the same
+lookup order as fsnotes), never against the current directory. The note is
+written in place to keep its extended attributes; its previous content is
+kept in a temp file until the write is verified, and the script prints that
+file's path if the write fails. `add` holds an exclusive file lock on the
+note (`lockf`, which macOS ships) for the whole check and write, so two
+sessions that park at the same moment both keep their entries. The lock is
+advisory: it orders session-park runs, not edits made in the FSNotes app.
+
+### Requirements
+
+The **fsnotes** plugin, and `jq` to read the start directory from the
+transcript (without it the current directory is used).
+
+### Install
+
+```
+/plugin marketplace add olomix/cc-thingz
+/plugin install fsnotes
+/plugin install session-park
+```
+
 ## Development
 
 ```
@@ -244,10 +303,16 @@ tests/gh-lookup_test.sh
 shellcheck tests/dotfiles_test.sh plugins/dotfiles/scripts/*.sh
 tests/dotfiles_test.sh
 
-shellcheck tests/html-popup_test.sh plugins/html-popup/scripts/*.sh \
-  plugins/html-popup/viewer/*.sh plugins/html-popup/examples/*/*.sh \
+shellcheck tests/html-popup_test.sh \
+  plugins/html-popup/skills/html-popup/scripts/*.sh \
+  plugins/html-popup/skills/html-popup/viewer/*.sh \
+  plugins/html-popup/skills/html-popup/examples/*/*.sh \
   tests/fixtures/fake-swiftc.sh tests/fixtures/fake-open.sh
 tests/html-popup_test.sh
+
+shellcheck tests/session-park_test.sh \
+  plugins/session-park/skills/session-park/scripts/*.sh
+tests/session-park_test.sh
 ```
 
 Tests are pure bash with no external framework. The fsnotes tests build a
@@ -256,15 +321,17 @@ notes; the gh-lookup tests stub `gh` via `GH_BIN` and synthetic fixtures, so
 they never call the real binary or the network; the dotfiles tests build a
 throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
 `DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`; the
+session-park tests use fixture notes and a fake `CLAUDE_CONFIG_DIR`, so they
+never read real notes or transcripts; the
 html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
 cache dir, its fake-viewer tests replace `open` via `HTML_POPUP_OPEN`, while
 its viewer tests compile the real viewer and drive invisible
 windows with `HTML_POPUP_TEST_SCRIPT`. Those viewer tests are skipped unless
 `swiftc` is installed and the session is a GUI (Aqua) login, and tests that
 run the wrapper's build step or fake viewers are skipped off macOS. After
-editing `plugins/html-popup/viewer/AppIcon.svg`, run
-`plugins/html-popup/viewer/make-icon.sh` (macOS 14+) and commit the new
-`AppIcon.icns`.
+editing `plugins/html-popup/skills/html-popup/viewer/AppIcon.svg`, run
+`plugins/html-popup/skills/html-popup/viewer/make-icon.sh` (macOS 14+) and
+commit the new `AppIcon.icns`.
 
 ## License
 
