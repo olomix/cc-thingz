@@ -461,14 +461,21 @@ test_locking() {
   assert "parallel runs keep the older entries" \
     grep -q 'aaaaaaaa-0000-0000-0000-000000000000' "$note"
 
-  # Hold the lock, then ask for it with no wait.
+  # Hold the lock, wait until the holder runs, then ask with no wait.
+  local ready="$SANDBOX/holder-ready"
+  # shellcheck disable=SC2016 # $1 expands in the holder's shell
+  local hold='touch "$1"; sleep 10'
   if [[ "$tool" == */lockf ]]; then
-    "$tool" -k -s "$note" sleep 5 &
+    "$tool" -k -s "$note" sh -c "$hold" _ "$ready" &
   else
-    "$tool" "$note" sleep 5 &
+    "$tool" "$note" sh -c "$hold" _ "$ready" &
   fi
   holder=$!
-  sleep 1
+  for i in $(seq 1 100); do
+    [[ -e "$ready" ]] && break
+    sleep 0.1
+  done
+  assert "the lock holder started" test -e "$ready"
   set +e
   err="$(SESSION_PARK_LOCK_TIMEOUT=0 \
     park add --session-id held --dir /p "$note" t 2>&1 >/dev/null)"
@@ -480,6 +487,29 @@ test_locking() {
   assert "a held lock is reported" contains "holds $note" "$err"
   assert_eq "a held lock leaves the note without the entry" "0" \
     "$(grep -c 'claude --resume held' "$note" || true)"
+
+  set +e
+  err="$(SESSION_PARK_LOCK_TIMEOUT=abc \
+    park add --session-id bad-timeout --dir /p "$note" t 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  assert_eq "a non-numeric lock timeout exits 1" "1" "$rc"
+  assert "a non-numeric lock timeout is reported" \
+    contains "session-park: SESSION_PARK_LOCK_TIMEOUT" "$err"
+
+  if [[ "$(id -u)" -ne 0 ]]; then
+    chmod 000 "$note"
+    set +e
+    err="$(park add --session-id unreadable --dir /p "$note" t 2>&1 >/dev/null)"
+    rc=$?
+    set -e
+    chmod 644 "$note"
+    assert_eq "an unreadable note exits 1" "1" "$rc"
+    assert "an unreadable note is reported by session-park" \
+      contains "session-park: " "$err"
+  else
+    printf 'skip - unreadable note test needs a non-root user\n'
+  fi
 
   rm -rf "$SANDBOX"
 }

@@ -152,7 +152,7 @@ test_manifest() {
   assert "plugin.json exists" test -f "$manifest"
   assert "plugin.json parses" jq empty "$manifest"
   assert_eq "plugin.json name" "html-popup" "$(jq -r .name "$manifest")"
-  assert_eq "plugin.json version" "0.1.0" "$(jq -r .version "$manifest")"
+  assert_eq "plugin.json version" "0.2.0" "$(jq -r .version "$manifest")"
   assert_eq "plugin.json license" "MIT" "$(jq -r .license "$manifest")"
   assert "plugin.json has a description" \
     test -n "$(jq -r '.description // empty' "$manifest")"

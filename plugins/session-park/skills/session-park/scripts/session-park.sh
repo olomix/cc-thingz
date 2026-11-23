@@ -285,6 +285,10 @@ replace_note_content() {
 run_locked() {
   local note="$1" timeout="${SESSION_PARK_LOCK_TIMEOUT:-10}" status=0
   shift
+  if [[ ! "$timeout" =~ ^[0-9]+$ ]]; then
+    fail "SESSION_PARK_LOCK_TIMEOUT must be whole seconds: $timeout"
+    return 1
+  fi
   if command -v lockf >/dev/null 2>&1; then
     lockf -k -s -t "$timeout" "$note" "$@" || status=$?
   elif command -v flock >/dev/null 2>&1; then
@@ -293,11 +297,19 @@ run_locked() {
     printf 'session-park: no lockf or flock; writing without a lock\n' >&2
     "$@" || status=$?
   fi
-  if [[ "$status" -eq "$LOCK_TIMEOUT_STATUS" ]]; then
-    fail "another session-park run holds $note; try again"
-    return 1
-  fi
-  return "$status"
+  case "$status" in
+    0 | 1 | 2)
+      return "$status"
+      ;;
+    "$LOCK_TIMEOUT_STATUS")
+      fail "another session-park run holds $note; try again"
+      return 1
+      ;;
+  esac
+  # Any other status comes from the lock tool itself (it could not open or
+  # lock the note) or from a signal; keep the documented 0/1/2 contract.
+  fail "could not lock $note (status $status)"
+  return 1
 }
 
 cmd_info() {
@@ -414,8 +426,8 @@ main() {
         cmd_add "${positional[@]}"
         return
       fi
-      # Run the same command again under the lock: a shell script cannot
-      # take a flock(2) lock on its own on macOS.
+      # Run the same command again under the lock, so the lock lives exactly
+      # as long as that process and the code needs no fd juggling.
       local note
       note="$(resolve_note_path "${positional[0]}")" || return 1
       run_locked "$note" env SESSION_PARK_LOCK_HELD=1 \
