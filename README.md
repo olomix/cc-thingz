@@ -1,8 +1,8 @@
 # olomix-cc-thingz
 
 A personal [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin
-marketplace. It currently ships four plugins, **fsnotes**, **gh-lookup**,
-**dotfiles**, and **html-popup**.
+marketplace. It currently ships five plugins, **fsnotes**, **gh-lookup**,
+**dotfiles**, **html-popup**, and **session-park**.
 
 ## fsnotes
 
@@ -231,6 +231,49 @@ prompt.
 /plugin install html-popup
 ```
 
+## session-park
+
+Lets Claude park the session you are in so you can come back to it: "park
+this session" adds an entry to the top of your FSNotes note of unfinished
+Claude sessions.
+
+````
+## billing: retry webhook deliveries
+```bash
+cd /path/to/project
+claude --resume 11111111-2222-3333-4444-555555555555
+```
+````
+
+Claude finds the note through the **fsnotes** plugin (the most recently
+modified note titled like "Unfinished Claude sessions", created if there is
+none) and writes the short title. The rest is one deterministic script,
+`plugins/session-park/scripts/session-park.sh`:
+
+- `session-park.sh add <note-path> <title>` — add the entry below the note's
+  `# Title` line. If the note already holds the session ID, it is left
+  unchanged and the script prints the heading the session is under.
+- `session-park.sh info` — print the session ID and directory only.
+
+The session ID comes from `CLAUDE_CODE_SESSION_ID`. The directory is the one
+the session started in, read from the session transcript, because
+`claude --resume` finds a session only from that directory; a later `cd`
+inside the session does not change it. `--session-id` and `--dir` override
+both.
+
+### Requirements
+
+The **fsnotes** plugin, and `jq` to read the start directory from the
+transcript (without it the current directory is used).
+
+### Install
+
+```
+/plugin marketplace add olomix/cc-thingz
+/plugin install fsnotes
+/plugin install session-park
+```
+
 ## Development
 
 ```
@@ -248,6 +291,9 @@ shellcheck tests/html-popup_test.sh plugins/html-popup/scripts/*.sh \
   plugins/html-popup/viewer/*.sh plugins/html-popup/examples/*/*.sh \
   tests/fixtures/fake-swiftc.sh tests/fixtures/fake-open.sh
 tests/html-popup_test.sh
+
+shellcheck tests/session-park_test.sh plugins/session-park/scripts/*.sh
+tests/session-park_test.sh
 ```
 
 Tests are pure bash with no external framework. The fsnotes tests build a
@@ -256,6 +302,8 @@ notes; the gh-lookup tests stub `gh` via `GH_BIN` and synthetic fixtures, so
 they never call the real binary or the network; the dotfiles tests build a
 throwaway bare repo and work-tree in a temp dir via `DOTFILES_GIT_DIR` /
 `DOTFILES_WORK_TREE` and never touch the real `~/.dotfiles` or `$HOME`; the
+session-park tests use fixture notes and a fake `CLAUDE_CONFIG_DIR`, so they
+never read real notes or transcripts; the
 html-popup build tests use a fake compiler via `HTML_POPUP_SWIFTC` and a temp
 cache dir, its fake-viewer tests replace `open` via `HTML_POPUP_OPEN`, while
 its viewer tests compile the real viewer and drive invisible
