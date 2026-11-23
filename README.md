@@ -271,7 +271,10 @@ A relative note path is resolved against the notes directory (the same
 lookup order as fsnotes), never against the current directory. The note is
 written in place to keep its extended attributes; its previous content is
 kept in a temp file until the write is verified, and the script prints that
-file's path if the write fails.
+file's path if the write fails. `add` holds an exclusive file lock on the
+note (`lockf`, which macOS ships) for the whole check and write, so two
+sessions that park at the same moment both keep their entries. The lock is
+advisory: it orders session-park runs, not edits made in the FSNotes app.
 
 ### Requirements
 

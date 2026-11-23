@@ -20,8 +20,16 @@
 # A relative <note-path> is resolved against the FSNotes store only
 # ($FSNOTES_DIR, else the iCloud path), never against the current directory.
 #
+# `add` holds an exclusive flock(2) lock on the note for the whole check and
+# write, so concurrent runs on one note cannot drop each other's entries. The
+# lock comes from lockf(1) (macOS), else flock(1); $SESSION_PARK_LOCK_TIMEOUT
+# is the wait in seconds (default 10). FSNotes itself does not take the lock.
+#
 # Exit codes: 0 ok, 1 runtime error, 2 usage error.
 set -euo pipefail
+
+# Exit status of lockf(1) when it gives up waiting (EX_TEMPFAIL).
+LOCK_TIMEOUT_STATUS=75
 
 # Set by cmd_add; read by the EXIT trap.
 WORK_DIR=""
@@ -271,6 +279,27 @@ replace_note_content() {
   return 1
 }
 
+# run_locked <note> <command...> : run the command while holding an exclusive
+# lock on the note. The lock is on the note file itself, so every run agrees
+# on it whatever its TMPDIR, and it ends with the process that holds it.
+run_locked() {
+  local note="$1" timeout="${SESSION_PARK_LOCK_TIMEOUT:-10}" status=0
+  shift
+  if command -v lockf >/dev/null 2>&1; then
+    lockf -k -s -t "$timeout" "$note" "$@" || status=$?
+  elif command -v flock >/dev/null 2>&1; then
+    flock -w "$timeout" -E "$LOCK_TIMEOUT_STATUS" "$note" "$@" || status=$?
+  else
+    printf 'session-park: no lockf or flock; writing without a lock\n' >&2
+    "$@" || status=$?
+  fi
+  if [[ "$status" -eq "$LOCK_TIMEOUT_STATUS" ]]; then
+    fail "another session-park run holds $note; try again"
+    return 1
+  fi
+  return "$status"
+}
+
 cmd_info() {
   local id dir config_dir
   id="$(resolve_session_id "$opt_session_id")" || return 1
@@ -336,6 +365,7 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
+  local original_args=("$@")
   local command="${1:-}"
   [[ $# -gt 0 ]] && shift
   opt_session_id=""
@@ -376,7 +406,20 @@ main() {
       cmd_newest ${positional[@]+"${positional[@]}"}
       ;;
     add)
-      cmd_add ${positional[@]+"${positional[@]}"}
+      if [[ ${#positional[@]} -ne 2 ]]; then
+        usage
+        return 2
+      fi
+      if [[ -n "${SESSION_PARK_LOCK_HELD:-}" ]]; then
+        cmd_add "${positional[@]}"
+        return
+      fi
+      # Run the same command again under the lock: a shell script cannot
+      # take a flock(2) lock on its own on macOS.
+      local note
+      note="$(resolve_note_path "${positional[0]}")" || return 1
+      run_locked "$note" env SESSION_PARK_LOCK_HELD=1 \
+        "$BASH" "${BASH_SOURCE[0]}" "${original_args[@]}"
       ;;
     *)
       usage

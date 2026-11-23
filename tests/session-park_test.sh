@@ -432,6 +432,58 @@ test_failed_write() {
   rm -rf "$SANDBOX"
 }
 
+# --- Tests: locking -----------------------------------------------------------
+
+# lock_tool : print the lock command the script would use, or nothing.
+lock_tool() {
+  command -v lockf 2>/dev/null || command -v flock 2>/dev/null || true
+}
+
+test_locking() {
+  local note tool i count err rc holder
+  tool="$(lock_tool)"
+  if [[ -z "$tool" ]]; then
+    printf 'skip - locking tests need lockf or flock\n'
+    return 0
+  fi
+  make_sandbox
+  note="$SANDBOX/notes/Sessions.markdown"
+
+  # Without the lock, parallel runs read the same old note and the last
+  # writer drops the entries of the others.
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    park add --session-id "parallel-$i" --dir /p "$note" "p $i" \
+      >/dev/null 2>&1 &
+  done
+  wait
+  count="$(grep -c '^claude --resume parallel-' "$note")"
+  assert_eq "parallel runs keep every entry" "12" "$count"
+  assert "parallel runs keep the older entries" \
+    grep -q 'aaaaaaaa-0000-0000-0000-000000000000' "$note"
+
+  # Hold the lock, then ask for it with no wait.
+  if [[ "$tool" == */lockf ]]; then
+    "$tool" -k -s "$note" sleep 5 &
+  else
+    "$tool" "$note" sleep 5 &
+  fi
+  holder=$!
+  sleep 1
+  set +e
+  err="$(SESSION_PARK_LOCK_TIMEOUT=0 \
+    park add --session-id held --dir /p "$note" t 2>&1 >/dev/null)"
+  rc=$?
+  set -e
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  assert_eq "a held lock exits 1" "1" "$rc"
+  assert "a held lock is reported" contains "holds $note" "$err"
+  assert_eq "a held lock leaves the note without the entry" "0" \
+    "$(grep -c 'claude --resume held' "$note" || true)"
+
+  rm -rf "$SANDBOX"
+}
+
 # --- Runner -------------------------------------------------------------------
 
 main() {
@@ -442,6 +494,7 @@ main() {
   test_add_edge_cases
   test_newest
   test_failed_write
+  test_locking
 
   printf '\nAll %d assertions passed.\n' "$PASS_COUNT"
 }
